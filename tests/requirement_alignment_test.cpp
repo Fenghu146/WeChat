@@ -174,6 +174,19 @@ FH_TEST(Doc_2_2_6_3_CrossPlatformRecommendation) {
     FH_CHECK(fr.makeFriends(*a, *f, PlatformKindFH::QQ));
     FH_CHECK(fr.makeFriends(*b, *c, PlatformKindFH::WeChat));  // 干扰项
 
+    // 本人须已开通来源/目标服务（任务书 6.(3)）：丙有 QQ 好友甲，
+    // 但丙未开通 QQ/微信 → 不可依据 QQ 好友推荐微信好友
+    FH_CHECK(!fr.isRecommendable(*c, *a, PlatformKindFH::QQ,
+                                 PlatformKindFH::WeChat));
+    ActivationManagerFH act;
+    FH_CHECK(act.activate(*c, PlatformKindFH::QQ));  // 只开通来源
+    FH_CHECK(!fr.isRecommendable(*c, *a, PlatformKindFH::QQ,
+                                 PlatformKindFH::WeChat));  // 目标未开通
+    FH_CHECK(act.activate(*c, PlatformKindFH::WeChat));
+    // 甲开通 QQ/微信后，推荐链路可用
+    FH_CHECK(act.activate(*a, PlatformKindFH::QQ));
+    FH_CHECK(act.activate(*a, PlatformKindFH::WeChat));
+
     // 推荐列表：依据 QQ 好友在微信可推荐 → {乙, 丙}（己未绑定微信）
     const auto rec = fr.recommendFriendsFrom(*a, reg, PlatformKindFH::QQ,
                                              PlatformKindFH::WeChat);

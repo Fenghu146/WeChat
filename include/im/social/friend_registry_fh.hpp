@@ -27,24 +27,7 @@
 #include "im/platform/user_profile_fh.hpp"
 #include "im/platform/persist_util_fh.hpp"
 #include "im/platform/user_registry_fh.hpp"
-
-// 一条好友/关注关系记录（值对象）
-struct FriendShipFH {
-    PlatformKindFH platform = PlatformKindFH::QQ;  // 所在微X 平台
-    std::string ownerId;   // 关系发起者在该平台的账号号码
-    std::string peerId;    // 对方在该平台的账号号码
-    bool mutual = false;   // true=双向好友(QQ/微信)；false=单向关注(微博)
-    std::string remark;    // 备注名（可选）
-
-    FriendShipFH() = default;
-    FriendShipFH(PlatformKindFH p, std::string owner, std::string peer,
-                 bool isMutual, std::string remarkName = {})
-        : platform(p),
-          ownerId(std::move(owner)),
-          peerId(std::move(peer)),
-          mutual(isMutual),
-          remark(std::move(remarkName)) {}
-};
+#include "im/social/friend_ship_fh.hpp"
 
 class FriendRegistryFH {
 public:
@@ -192,12 +175,18 @@ public:
 
     // ---------- 跨服务推荐添加好友（任务书 2.(2)、6.(3)） ----------
     // other 是否可由 fromPlatform 的好友关系推荐为 toPlatform 好友：
-    // 两平台不同、双方均有 toPlatform 账号、在 fromPlatform 已互为
-    // 好友、且在 toPlatform 尚不是好友。
+    //   1) 本人已开通来源与目标服务（任务书 6.(3)：“本人开通的”
+    //      服务之间才可互推，未开通的服务不在推荐范围内）；
+    //   2) 两平台不同；
+    //   3) 双方均有 toPlatform 账号；
+    //   4) 在 fromPlatform 已互为好友；
+    //   5) 在 toPlatform 尚不是好友。
     bool isRecommendable(const UserProfileFH& user, const UserProfileFH& other,
                          PlatformKindFH fromPlatform,
                          PlatformKindFH toPlatform) const {
         if (fromPlatform == toPlatform) return false;
+        if (!user.isActivated(fromPlatform) || !user.isActivated(toPlatform))
+            return false;  // 本人须已开通来源与目标服务（6.(3)）
         if (!user.hasPlatformAccount(toPlatform) ||
             !other.hasPlatformAccount(toPlatform))
             return false;
