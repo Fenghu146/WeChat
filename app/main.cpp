@@ -323,17 +323,20 @@ void runAutoSocialScenario() {
               << "（应失败）\n";
     std::cout << "     小红加入 QQ 群 1001："
               << ok(groupReg.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001")) << "\n";
-    std::cout << "     小明加入微信群 1003（凭微信号入册）："
+    std::cout << "     小明直接申请加入微信群 1003（应失败：微信群只能推荐加入）："
               << ok(groupReg.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003")) << "\n";
-    if (const GroupInfoFH* g = groupReg.findGroup("1003")) {
-        std::cout << "     微信群 1003 当前成员：";
-        for (const std::string& id : g->memberIds) std::cout << id << " ";
-        std::cout << "\n";
-    }
     std::cout << "     小明在 QQ 自建群“阶段C开发组”（自动分配群号）："
               << ok(groupReg.createGroup(*xiaoming, PlatformKindFH::QQ, "阶段C开发组")) << "\n";
     if (const GroupInfoFH* g = groupReg.findGroup("1007"))
         std::cout << "     自建群号 " << g->groupId << "，群主 " << g->ownerId << " 已自动入群\n";
+    std::cout << "     小明自建微信群“家人群”并推荐小红加入（微信群只能推荐加入）："
+              << ok(groupReg.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")) << " / "
+              << ok(groupReg.inviteIntoGroup(*xiaoming, *xiaohong, "1008")) << "\n";
+    if (const GroupInfoFH* g = groupReg.findGroup("1008")) {
+        std::cout << "     微信群 1008 当前成员：";
+        for (const std::string& id : g->memberIds) std::cout << id << " ";
+        std::cout << "\n";
+    }
     std::cout << "     小明当前群列表：";
     for (const GroupInfoFH* g : groupReg.groupsOfUser(*xiaoming))
         std::cout << "[" << toZhName(g->platform) << " " << g->groupId << " "
@@ -398,12 +401,16 @@ void runAutoMessageScenario() {
               << ok(registry.bindWeChat(xiaoming, "wx-88-0001")) << "\n";
 
     GroupRegistryFH groups;
-    std::cout << "     小明入群 QQ 1001 / 微信 1003 / 微博 1005："
+    std::cout << "     小明入群 QQ 1001 / 微博 1005（QQ/微博群可申请加入）："
               << ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
               << " / "
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
-              << " / "
               << ok(groups.joinGroup(*xiaoming, PlatformKindFH::Weibo, "1005"))
+              << "\n";
+    std::cout << "     小明直接申请加入微信群 1003（应失败：微信群只能推荐加入）："
+              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
+              << "\n";
+    std::cout << "     小明自建微信群“家人群”（1007，推荐制入群入口）："
+              << ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群"))
               << "\n";
     std::cout << "     小红入群 QQ 1001："
               << ok(groups.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001"))
@@ -414,14 +421,14 @@ void runAutoMessageScenario() {
                                             "1001", MessageKindFH::FILE,
                                             "架构图.pdf"))
               << "（QQ 支持全部类型）\n";
-    std::cout << "     小明在微信群 1003 发文件「合同.docx」："
+    std::cout << "     小明在微信群 1007 发文件「合同.docx」："
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat,
-                                            "1003", MessageKindFH::FILE,
+                                            "1007", MessageKindFH::FILE,
                                             "合同.docx"))
               << "（应失败：微信群禁文件，简化口径）\n";
-    std::cout << "     小明在微信群 1003 发图片「晚霞.jpg」："
+    std::cout << "     小明在微信群 1007 发图片「晚霞.jpg」："
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat,
-                                            "1003", MessageKindFH::IMAGE,
+                                            "1007", MessageKindFH::IMAGE,
                                             "晚霞.jpg"))
               << "\n";
     std::cout << "     小明在微博群 1005 发图片「热点截图.jpg」："
@@ -461,8 +468,8 @@ void runAutoMessageScenario() {
                                         r.content, r.kind,
                                         toTimeText(r.sentAt))
                   << (r.isReply ? "（引用回复）" : "") << "\n";
-    std::cout << "     微信群 1003 聊天记录（微信视图）：\n";
-    for (const GroupChatRecordFH& r : groups.chatOf("1003"))
+    std::cout << "     微信群 1007 聊天记录（微信视图）：\n";
+    for (const GroupChatRecordFH& r : groups.chatOf("1007"))
         std::cout << "       · " << PlatformMessagePolicyFH::render(
                                         PlatformKindFH::WeChat, r.senderNick,
                                         r.content, r.kind,

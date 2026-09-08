@@ -111,8 +111,8 @@ FH_TEST(JoinGroupGateChecksPlatformAndAccount) {
     FH_CHECK(!gr.joinGroup(*p.xm, PlatformKindFH::QQ, "1001"));       // 重复入群
     FH_CHECK(!gr.joinGroup(*p.xm, PlatformKindFH::QQ, "1003"));       // 平台不匹配
     FH_CHECK(!gr.joinGroup(*p.xm, PlatformKindFH::WeChat, "1001"));   // 群平台不匹配
-    FH_CHECK(!gr.joinGroup(*p.luren, PlatformKindFH::WeChat, "1003"));// 无微信号
-    FH_CHECK(gr.joinGroup(*p.xm, PlatformKindFH::WeChat, "1003"));    // 绑定后可入
+    // 微信群只能推荐加入：即使已绑定微信号，直接申请也被拒
+    FH_CHECK(!gr.joinGroup(*p.xm, PlatformKindFH::WeChat, "1003"));
     FH_CHECK(gr.leaveGroup(*p.xm, "1001"));
     FH_CHECK(!gr.leaveGroup(*p.xm, "1001"));  // 已退出
 }
@@ -164,7 +164,8 @@ FH_TEST(SendGroupMessageEnforcesKindLengthAndReply) {
     People p;
     GroupRegistryFH gr;
     FH_CHECK(gr.joinGroup(*p.xm, PlatformKindFH::QQ, "1001"));
-    FH_CHECK(gr.joinGroup(*p.xm, PlatformKindFH::WeChat, "1003"));
+    // 微信群只能推荐加入：自建微信群获得成员资格后再演示消息规则
+    FH_CHECK(gr.createGroup(*p.xm, PlatformKindFH::WeChat, "消息规则群"));  // 1007
     FH_CHECK(gr.joinGroup(*p.xm, PlatformKindFH::Weibo, "1005"));
 
     FH_CHECK(!gr.sendGroupMessage(*p.bing, PlatformKindFH::QQ, "1001",
@@ -173,9 +174,9 @@ FH_TEST(SendGroupMessageEnforcesKindLengthAndReply) {
     FH_CHECK(gr.sendGroupMessage(*p.xm, PlatformKindFH::QQ, "1001",
                                  MessageKindFH::FILE, "架构图.pdf"));
     // 微信：禁文件，允许图片
-    FH_CHECK(!gr.sendGroupMessage(*p.xm, PlatformKindFH::WeChat, "1003",
+    FH_CHECK(!gr.sendGroupMessage(*p.xm, PlatformKindFH::WeChat, "1007",
                                   MessageKindFH::FILE, "文件.docx"));
-    FH_CHECK(gr.sendGroupMessage(*p.xm, PlatformKindFH::WeChat, "1003",
+    FH_CHECK(gr.sendGroupMessage(*p.xm, PlatformKindFH::WeChat, "1007",
                                  MessageKindFH::IMAGE, "晚霞.jpg"));
     // 微博：仅文本/表情；不支持引用
     FH_CHECK(!gr.sendGroupMessage(*p.xm, PlatformKindFH::Weibo, "1005",

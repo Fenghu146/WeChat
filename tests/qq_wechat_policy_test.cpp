@@ -71,13 +71,14 @@ FH_TEST(QQMemberInviteDependsOnConfig) {
     FH_CHECK(on.qq->inviteMember(on.member, on.outsider));      // 开关开启：成员可邀请
 }
 
-// 微信：普通成员永远不能邀请，仅 ADMIN+
-FH_TEST(WeChatMemberInviteAlwaysForbidden) {
+// 微信：仅群主可邀请（推荐加入）；管理员/普通成员均禁止
+FH_TEST(WeChatOwnerOnlyInvite) {
     GroupPair off(false);
     GroupPair on(true);   // 即使配置开关注入微信群也无效
     FH_CHECK(!off.wx->inviteMember(off.member, off.outsider));
     FH_CHECK(!on.wx->inviteMember(on.member, on.outsider));
-    FH_CHECK(on.wx->inviteMember(on.admin, on.outsider));       // 管理员可邀请
+    FH_CHECK(!on.wx->inviteMember(on.admin, on.outsider));      // 管理员亦禁止
+    FH_CHECK(on.wx->inviteMember(on.owner, on.outsider));       // 仅群主可邀请
 }
 
 // 全员禁言设置权限差异：QQ=ADMIN+；微信=仅群主

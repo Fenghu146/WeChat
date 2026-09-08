@@ -923,6 +923,9 @@ void runOfficialChat(const std::string& groupId) {
                 if (!hasAcct)
                     noticeFail("你没有该平台的账号"
                                "（微信群需先绑定微信号）。");
+                else if (pl == PlatformKindFH::WeChat)
+                    noticeFail("微信群只能推荐加入：不受理直接申请，"
+                               "请由群内成员推荐你入群。");
                 else
                     noticeFail("加入失败：可能已在群内或群已满员。");
             }

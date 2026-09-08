@@ -123,10 +123,10 @@ Group ── 1..* ── GroupMembership ── 1 ── User
 
 | Action | QQPolicy | WeChatPolicy |
 |---|---|---|
-| `INVITE_MEMBER` | `memberInviteEnabled` 开启时普通成员可邀请；关闭时仅 ADMIN+ | 仅 ADMIN+ 可邀请，普通成员禁止 |
+| `INVITE_MEMBER` | `memberInviteEnabled` 开启时普通成员可邀请；关闭时仅 ADMIN+ | 仅 OWNER 可邀请（“微信群只能推荐加入”，任务书 3.(3)），ADMIN/普通成员均禁止 |
 | `SET_ALL_MUTE` | ADMIN+ 可执行 | 仅 OWNER 可执行 |
 
-> 裁决说明：初稿矩阵中“微信邀请默认禁止 / 管理员以上”与代码（`isPrivileged`）存在矛盾，合并版统一为“仅 ADMIN+ 可邀请”；“微信管理员能否设置全员禁言”在两版文档中表述不一，合并版统一为“仅群主”。
+> 裁决说明：初稿矩阵中“微信邀请默认禁止 / 管理员以上”与代码（`isPrivileged`）存在矛盾，合并版曾统一为“仅 ADMIN+ 可邀请”。后对照课程任务书 3.(3)“QQ 群有以群主为核心的管理员制度而微信群仅有群主为特权账号”，最终口径为**微信群仅 OWNER 可邀请**（注册表推荐制入群 `inviteIntoGroup` 同口径），管理员在微信群不产生任何特权；从 QQ 群动态切换为微信群时成员与角色数据保留，权限按微信口径重新解释。
 
 #### 3.3.3 公共状态约束（两平台一致，置于父类）
 
@@ -488,7 +488,8 @@ protected:
 bool WeChatPolicy::checkPlatformRule(Action action, const GroupContext& c) const {
     switch (action) {
     case Action::INVITE_MEMBER:
-        return isPrivileged(c);                   // 微信：仅管理员以上
+        // 微信：仅群主可推荐加入（任务书 3.(3)：微信群仅有群主为特权账号）
+        return c.group->getRole(c.operatorUser) == GroupRole::OWNER;
     case Action::SET_ALL_MUTE:
         return c.group->getRole(c.operatorUser) == GroupRole::OWNER;  // 仅群主
     default:
