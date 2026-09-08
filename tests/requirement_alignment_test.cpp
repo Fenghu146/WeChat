@@ -420,6 +420,26 @@ FH_TEST(Doc_6_1_PersistenceRoundTrip) {
         FH_CHECK(gr.findGroup("1009") != nullptr);
     }
 
+    // —— 作用域三：容器实例化时读入（构造即加载，任务书优化(2)） ——
+    {
+        UserRegistryFH reg;
+        auto a = reg.registerUser("p001", "甲", "2000-01-01", "北京", 2018);
+        auto b = reg.registerUser("p002", "乙", "2000-02-02", "上海", 2019);
+        reg.bindWeChat(a, "wx-p1");
+        reg.bindWeChat(b, "wx-p2");
+
+        // 构造时直接传入存档路径：好友/群注册表自包含，实例化即恢复
+        FriendRegistryFH fr(friendPath);
+        GroupRegistryFH gr(groupPath);
+        FH_CHECK(fr.isFriend(*a, *b, PlatformKindFH::QQ));
+        FH_CHECK(fr.isFriend(*a, *b, PlatformKindFH::WeChat));
+        const GroupInfoFH* g7 = gr.findGroup("1007");
+        FH_CHECK(g7 != nullptr);
+        if (g7) FH_CHECK_EQ(g7->ownerId, string("p001"));
+        FH_CHECK(gr.isOwnerOf(*a, "1007"));
+        FH_CHECK(gr.findGroup("1009") != nullptr);  // 作用域二的续建群已写回
+    }
+
     std::remove(friendPath.c_str());
     std::remove(groupPath.c_str());
     std::remove(actPath.c_str());

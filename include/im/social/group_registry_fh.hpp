@@ -65,12 +65,15 @@ class GroupRegistryFH {
 public:
     // 构造时预置六个官方群（任务书口径：各微X 预置群号 1001~1006）
     GroupRegistryFH() {
-        addPredefined(PlatformKindFH::QQ, "1001", "电影兴趣群");
-        addPredefined(PlatformKindFH::QQ, "1002", "篮球同好群");
-        addPredefined(PlatformKindFH::WeChat, "1003", "家庭群");
-        addPredefined(PlatformKindFH::WeChat, "1004", "同事群");
-        addPredefined(PlatformKindFH::Weibo, "1005", "旅行分享群");
-        addPredefined(PlatformKindFH::Weibo, "1006", "读书打卡群");
+        seedPredefined();
+    }
+
+    // 实例化时读入（任务书优化(2)字面口径）：预置群先在代码中固化，
+    // 随即从文件加载目录（存档含预置群与自建群，加载结果即存档内容）
+    explicit GroupRegistryFH(const std::string& persistPath) {
+        seedPredefined();
+        persistPath_ = persistPath;
+        loadFromFile(persistPath);
     }
 
     // 断电保存：若配置了持久化文件，析构时写回（任务书优化(2)）
@@ -356,6 +359,14 @@ public:
     }
 
 private:
+    void seedPredefined() {
+        addPredefined(PlatformKindFH::QQ, "1001", "电影兴趣群");
+        addPredefined(PlatformKindFH::QQ, "1002", "篮球同好群");
+        addPredefined(PlatformKindFH::WeChat, "1003", "家庭群");
+        addPredefined(PlatformKindFH::WeChat, "1004", "同事群");
+        addPredefined(PlatformKindFH::Weibo, "1005", "旅行分享群");
+        addPredefined(PlatformKindFH::Weibo, "1006", "读书打卡群");
+    }
     static const std::vector<GroupChatRecordFH>& emptyChat() {
         static const std::vector<GroupChatRecordFH> empty;
         return empty;

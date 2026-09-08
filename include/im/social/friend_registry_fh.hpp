@@ -50,6 +50,12 @@ class FriendRegistryFH {
 public:
     FriendRegistryFH() = default;
 
+    // 实例化时读入（任务书优化(2)字面口径）：构造即从文件加载
+    explicit FriendRegistryFH(const std::string& persistPath) {
+        persistPath_ = persistPath;
+        loadFromFile(persistPath);
+    }
+
     // 断电保存：若配置了持久化文件，析构时写回（任务书优化(2)）
     ~FriendRegistryFH() {
         if (!persistPath_.empty()) saveToFile(persistPath_);
