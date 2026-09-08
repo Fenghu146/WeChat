@@ -29,6 +29,7 @@
 #include "im/social/discussion_group_fh.hpp"
 #include "im/social/friend_registry_fh.hpp"
 #include "im/social/group_registry_fh.hpp"
+#include "client_ui.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -486,309 +487,26 @@ void runAutoMessageScenario() {
     std::cout << "======== 阶段 D 自动演示结束 ========\n";
 }
 
-// ============================================================
-// 以下为交互菜单“阶段 C / 阶段 D 手动体验”入口。
-// 与菜单 1~6 一致：每次进入都会重建独立数据并演示一轮，
-// 因此可反复选择反复观察，不依赖自动演示的数据。
-// ============================================================
 
-void runManualFriendDemo() {  // 阶段 C：好友 / 微博关注
-    std::cout << "\n  —— 社交·好友与微博关注（阶段 C，每次进入重新演示一轮）\n";
-    UserRegistryFH registry;
-    auto xiaoming =
-        registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
-    auto xiaohong =
-        registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
-    auto lurenB =
-        registry.registerUser("10003", "路人乙", "2001-03-03", "四川·成都", 2020);
-    registry.bindWeChat(xiaoming, "wx-88-0001");
-    registry.bindWeChat(xiaohong, "wx-88-0002");
-    FriendRegistryFH friends;
-    std::cout << "     小明与小红加 QQ 好友："
-              << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ))
-              << "（双向好友）\n";
-    std::cout << "     重复加 / 自己加自己："
-              << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ))
-              << " / " << ok(friends.makeFriends(*xiaoming, *xiaoming,
-                                                 PlatformKindFH::QQ))
-              << "（应失败）\n";
-    std::cout << "     路人乙未绑定微信，小明加其微信好友："
-              << ok(friends.makeFriends(*xiaoming, *lurenB,
-                                        PlatformKindFH::WeChat))
-              << "（应失败：微信须双方已绑定）\n";
-    std::cout << "     小明与小红加微信好友（双方已绑定 wx-88-0001/2）："
-              << ok(friends.makeFriends(*xiaoming, *xiaohong,
-                                        PlatformKindFH::WeChat))
-              << "\n";
-    std::cout << "     微博单向关注：小明关注小红："
-              << ok(friends.follow(*xiaoming, *xiaohong)) << "\n";
-    std::cout << "     关注≠好友：isFriend(微博)="
-              << ok(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::Weibo))
-              << "，isFollowing="
-              << ok(friends.isFollowing(*xiaoming, *xiaohong)) << "\n";
-    std::cout << "     删除 QQ 好友后微信好友仍在（平台隔离）："
-              << ok(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::WeChat))
-              << "\n";
-}
 
-void runManualGroupDemo() {  // 阶段 C：群注册表 + QQ 临时讨论组
-    std::cout << "\n  —— 社交·群注册表与 QQ 临时讨论组（阶段 C，每次进入重新演示一轮）\n";
-    UserRegistryFH registry;
-    auto xiaoming =
-        registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
-    auto xiaohong =
-        registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
-    auto lurenB =
-        registry.registerUser("10003", "路人乙", "2001-03-03", "四川·成都", 2020);
-    auto lurenC =
-        registry.registerUser("10004", "路人丙", "2002-07-07", "湖北·武汉", 2021);
-    registry.bindWeChat(xiaoming, "wx-88-0001");
 
-    GroupRegistryFH groupReg;
-    std::cout << "     预置官方群（1001~1006）各平台均有："
-              << ok(groupReg.findGroup("1001") != nullptr)
-              << " / "
-              << ok(groupReg.findGroup("1003") != nullptr)
-              << " / "
-              << ok(groupReg.findGroup("1005") != nullptr) << "\n";
-    std::cout << "     小明加入官方 QQ 群 1001："
-              << ok(groupReg.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
-              << "\n";
-    std::cout << "     小明加入官方微信群 1003（凭微信号 wx-88-0001 入册）："
-              << ok(groupReg.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
-              << "\n";
-    std::cout << "     重复加入 QQ 群 1001："
-              << ok(groupReg.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
-              << "（应失败）\n";
-    std::cout << "     小明在 QQ 自建群「手动开发群」（自动分配群号 1007）："
-              << ok(groupReg.createGroup(*xiaoming, PlatformKindFH::QQ,
-                                         "手动开发群"))
-              << "\n";
-    std::cout << "     小明当前所在群数："
-              << groupReg.groupsOfUser(*xiaoming).size() << "\n";
-
-    std::cout << "     创建 QQ 临时讨论组「手动讨论组」：\n";
-    DiscussionGroupFH disc("disc-manual", "手动讨论组", xiaoming->getQQId());
-    std::cout << "       发起人邀请小红："
-              << ok(disc.invite(*xiaoming, *xiaohong)) << "\n";
-    std::cout << "       任何成员可邀请：小红邀请路人乙："
-              << ok(disc.invite(*xiaohong, *lurenB))
-              << "（区别于正式群需管理员）\n";
-    std::cout << "       路人乙（普通成员）再邀请路人丙："
-              << ok(disc.invite(*lurenB, *lurenC)) << "\n";
-    std::cout << "       成员自由退出：小红退组："
-              << ok(disc.quit(*xiaohong)) << "\n";
-    std::cout << "       非发起人解散（路人乙）："
-              << ok(disc.disband(*lurenB)) << "（应失败）\n";
-    std::cout << "       发起人解散（小明）："
-              << ok(disc.disband(*xiaoming)) << "\n";
-}
-
-void runManualMessageDemo() {  // 阶段 D：消息平台差异 + 群消息记录
-    auto fmtTime = [](std::chrono::system_clock::time_point t) -> std::string {
-        const std::time_t tt = std::chrono::system_clock::to_time_t(t);
-        std::tm tm{};
-#ifdef _WIN32
-        localtime_s(&tm, &tt);
-#else
-        localtime_r(&tt, &tm);
-#endif
-        char buf[16] = {0};
-        std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm);
-        return std::string(buf);
-    };
-
-    std::cout << "\n  —— 消息·平台类型/引用差异与群记录（阶段 D，每次进入重新演示一轮）\n";
-    UserRegistryFH registry;
-    auto xiaoming =
-        registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
-    auto xiaohong =
-        registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
-    registry.bindWeChat(xiaoming, "wx-88-0001");
-
-    GroupRegistryFH groups;
-    std::cout << "     小明入群 QQ 1001 / 微信 1003 / 微博 1005："
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
-              << " / "
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
-              << " / "
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::Weibo, "1005"))
-              << "\n";
-    std::cout << "     小红入群 QQ 1001："
-              << ok(groups.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001"))
-              << "\n";
-    std::cout << "     类型/平台规则：QQ 发文件 "
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ, "1001",
-                                            MessageKindFH::FILE, "架构图.pdf"))
-              << "；微信群发文件 "
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat,
-                                            "1003", MessageKindFH::FILE, "合同.docx"))
-              << "（禁文件，应失败）/ 发图片 "
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat,
-                                            "1003", MessageKindFH::IMAGE, "晚霞.jpg"))
-              << "；微博群发图片 "
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
-                                            "1005", MessageKindFH::IMAGE, "截图.jpg"))
-              << "（仅文本/表情，应失败）/ 发文本 "
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
-                                            "1005", MessageKindFH::TEXT,
-                                            "今晚一起讨论任务书"))
-              << "\n";
-    const std::string longText(1001, '长');
-    std::cout << "     微博超长文本(>1000)："
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
-                                            "1005", MessageKindFH::TEXT, longText))
-              << "（应失败）\n";
-    std::cout << "     引用回复：QQ "
-              << ok(groups.sendGroupMessage(*xiaohong, PlatformKindFH::QQ, "1001",
-                                            MessageKindFH::TEXT, "回复@小明：收到",
-                                            /*asReply=*/true))
-              << "；微博 "
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
-                                            "1005", MessageKindFH::TEXT, "回复@小红：收到",
-                                            /*asReply=*/true))
-              << "（应失败：不支持引用）\n";
-    std::cout << "     各平台群消息记录：\n";
-    for (const GroupChatRecordFH& r : groups.chatOf("1001"))
-        std::cout << "       · " << PlatformMessagePolicyFH::render(
-                                        PlatformKindFH::QQ, r.senderNick,
-                                        r.content, r.kind, fmtTime(r.sentAt))
-                  << (r.isReply ? "（引用回复）" : "") << "\n";
-    for (const GroupChatRecordFH& r : groups.chatOf("1003"))
-        std::cout << "       · " << PlatformMessagePolicyFH::render(
-                                        PlatformKindFH::WeChat, r.senderNick,
-                                        r.content, r.kind, fmtTime(r.sentAt))
-                  << "\n";
-    for (const GroupChatRecordFH& r : groups.chatOf("1005"))
-        std::cout << "       · " << PlatformMessagePolicyFH::render(
-                                        PlatformKindFH::Weibo, r.senderNick,
-                                        r.content, r.kind, fmtTime(r.sentAt))
-                  << "\n";
-}
-
-// 交互菜单演示：使用独立于自动演示的“手动演示群”
-int runInteractiveMenu() {
-    auto mOwner   = std::make_shared<UserFH>("20001", "手动群主");
-    auto mAdmin   = std::make_shared<UserFH>("20002", "手动管理员");
-    auto mMember  = std::make_shared<UserFH>("20003", "手动成员");
-    auto mOutsider = std::make_shared<UserFH>("20004", "手动路人");
-
-    auto qqGroup = std::make_shared<GroupFH>(
-        "g-qq-101", 1003, "手动演示群",
-        GroupConfigFH(30, true, false, std::chrono::seconds(120)),
-        std::make_shared<QQPolicyFH>(), mOwner);
-    qqGroup->inviteMember(mOwner, mAdmin);
-    qqGroup->inviteMember(mOwner, mMember);
-    qqGroup->setAdmin(mOwner, mAdmin, true);  // 任命为管理员
-
-    int choice = -1;
-    while (choice != 0) {
-        std::cout << "\n================ 交互菜单 ================\n"
-                  << " 1. 普通成员发送一条消息（QQ 群）\n"
-                  << " 2. 查看两个群的成员与消息\n"
-                  << " 3. 普通成员邀请路人（QQ/微信对比演示）\n"
-                  << " 4. 管理员设置全员禁言后普通成员发言\n"
-                  << " 5. 动态切换管理模式（切到微信模式再切回）\n"
-                  << " 6. 群主解散“手动演示群”并验证不可操作\n"
-                  << " ---- 阶段 C / D 手动体验 ----\n"
-                  << " 7. 社交·好友与微博关注（阶段 C）\n"
-                  << " 8. 社交·官方/自建群与 QQ 临时讨论组（阶段 C）\n"
-                  << " 9. 消息·平台类型/引用差异与群消息记录（阶段 D）\n"
-                  << " 0. 退出\n"
-                  << " 请选择：";
-        std::cin >> choice;
-        if (!std::cin) {  // 处理非数字输入
-            std::cin.clear();
-            std::cin.ignore(1024, '\n');
-            choice = -1;
-        }
-
-        switch (choice) {
-        case 1: {
-            const std::string text = "来自普通成员的消息";
-            auto msg = makeMessage(mMember, text);
-            std::cout << "  发送结果：" << ok(qqGroup->sendMessage(mMember, msg)) << "\n";
-            break;
-        }
-        case 2:
-            printMembers("手动 QQ 群", *qqGroup);
-            printMessages("手动 QQ 群", *qqGroup);
-            break;
-        case 3: {
-            std::cout << "  QQ 群普通成员邀请路人："
-                      << ok(qqGroup->inviteMember(mMember, mOutsider))
-                      << "（QQ 开关开启，应成功）\n";
-            auto wx = std::make_shared<GroupFH>(
-                "g-wx-102", 1004, "手动微信群",
-                GroupConfigFH(30, true, false, std::chrono::seconds(120)),
-                std::make_shared<WeChatPolicyFH>(), mOwner);
-            wx->inviteMember(mOwner, mMember);
-            std::cout << "  微信群普通成员邀请路人："
-                      << ok(wx->inviteMember(mMember, mOutsider))
-                      << "（应失败，仅 ADMIN+）\n";
-            break;
-        }
-        case 4: {
-            std::cout << "  管理员设置全员禁言："
-                      << ok(qqGroup->setAllMute(mAdmin, true)) << "\n";
-            std::cout << "  普通成员发言："
-                      << ok(qqGroup->sendMessage(mMember,
-                              makeMessage(mMember, "全员禁言中的尝试")))
-                      << "（应失败）\n";
-            std::cout << "  群主解除全员禁言："
-                      << ok(qqGroup->setAllMute(mOwner, false)) << "\n";
-            break;
-        }
-        case 5: {
-            std::cout << "  切到微信模式："
-                      << ok(qqGroup->switchPolicy(std::make_shared<WeChatPolicyFH>()))
-                      << "；管理员设全员禁言："
-                      << ok(qqGroup->setAllMute(mAdmin, true)) << "（应失败）\n";
-            std::cout << "  切回 QQ 模式："
-                      << ok(qqGroup->switchPolicy(std::make_shared<QQPolicyFH>()))
-                      << "；管理员设全员禁言："
-                      << ok(qqGroup->setAllMute(mAdmin, true)) << "（应成功）\n";
-            qqGroup->setAllMute(mOwner, false);
-            break;
-        }
-        case 6: {
-            std::cout << "  群主解散："
-                      << ok(qqGroup->disband(mOwner)) << "\n";
-            std::cout << "  解散后发送消息："
-                      << ok(qqGroup->sendMessage(mMember,
-                              makeMessage(mMember, "解散后的消息")))
-                      << "（应失败）\n";
-            std::cout << "  解散后成员数：" << qqGroup->members().size() << "\n";
-            break;
-        }
-        case 7:
-            runManualFriendDemo();
-            break;
-        case 8:
-            runManualGroupDemo();
-            break;
-        case 9:
-            runManualMessageDemo();
-            break;
-        case 0:
-            std::cout << "  再见！\n";
-            break;
-        default:
-            std::cout << "  无效选择，请重新输入。\n";
-            break;
-        }
-    }
-    return 0;
-}
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     initConsole();
+    const bool demoMode =
+        argc > 1 && (std::string(argv[1]) == "--demo" ||
+                     std::string(argv[1]) == "demo");
     std::cout << "==== 模拟即时通信平台：QQ 群 / 微信群管理（作者代号 FH） ====\n";
-    runAutoScenario();
-    runAutoPlatformScenario();
-    runAutoSocialScenario();
-    runAutoMessageScenario();
-    return runInteractiveMenu();
+    if (demoMode) {
+        runAutoScenario();
+        runAutoPlatformScenario();
+        runAutoSocialScenario();
+        runAutoMessageScenario();
+        std::cout << "\n自动演示结束，进入手动测试工作台。\n";
+    } else {
+        std::cout << "（提示：带参数 --demo 可先观看 A→D 自动演示）\n";
+    }
+    return fh_client::runClientUi();
 }
