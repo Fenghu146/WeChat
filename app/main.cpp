@@ -8,12 +8,19 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <string>
 
 #include "im/model/group_fh.hpp"
 #include "im/model/group_role_fh.hpp"
 #include "im/model/message_fh.hpp"
 #include "im/model/user_fh.hpp"
+#include "im/platform/account_info_fh.hpp"
+#include "im/platform/activation_manager_fh.hpp"
+#include "im/platform/login_manager_fh.hpp"
+#include "im/platform/platform_kind_fh.hpp"
+#include "im/platform/user_profile_fh.hpp"
+#include "im/platform/user_registry_fh.hpp"
 #include "im/policy/qq_policy_fh.hpp"
 #include "im/policy/wechat_policy_fh.hpp"
 
@@ -160,6 +167,84 @@ void runAutoScenario() {
     std::cout << "=========== 自动演示结束 ===========\n";
 }
 
+// 打印自然人的当前在线服务列表
+void printOnlinePlatforms(const char* who, const std::set<PlatformKindFH>& platforms) {
+    std::cout << "     " << who << " 当前在线服务：";
+    if (platforms.empty()) {
+        std::cout << "（无）\n";
+        return;
+    }
+    bool first = true;
+    for (PlatformKindFH p : platforms) {
+        std::cout << (first ? "" : " / ") << toZhName(p);
+        first = false;
+    }
+    std::cout << "\n";
+}
+
+// 阶段 B 自动演示：多产品账号 / 开通 / 登录联动（独立数据）
+void runAutoPlatformScenario() {
+    std::cout << "\n======== 自动演示：多产品账号 / 开通 / 登录（任务书 1·4·5） ========\n";
+    UserRegistryFH registry;
+    ActivationManagerFH activation;
+    LoginManagerFH login;
+    constexpr int CURRENT_YEAR = 2026;
+
+    auto xiaoming = registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
+    auto xiaohong = registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
+
+    std::cout << "[B1] 号码体系：QQ 与微博共享 ID，微信独立可绑定 QQ\n";
+    {
+        auto qq = registry.makeAccount(*xiaoming, PlatformKindFH::QQ);
+        auto wb = registry.makeAccount(*xiaoming, PlatformKindFH::Weibo);
+        std::cout << "     " << xiaoming->getNickname() << " 的 QQ 号：" << qq.getAccountId()
+                  << "（昵称 " << qq.getNickname() << "，所在地 " << qq.getLocation()
+                  << "，T 龄 " << qq.tAge(CURRENT_YEAR) << " 年）\n";
+        std::cout << "     微博号：" << wb.getAccountId() << "（与 QQ 号码相同）\n";
+    }
+
+    std::cout << "\n[B2] 自选开通微X 服务（ActivationManagerFH）\n";
+    std::cout << "     开通 QQ：" << ok(activation.activate(*xiaoming, PlatformKindFH::QQ)) << "\n";
+    std::cout << "     开通微博（QQ 同号即具资格）："
+              << ok(activation.activate(*xiaoming, PlatformKindFH::Weibo)) << "\n";
+    std::cout << "     未绑定微信号就开通微信："
+              << ok(activation.activate(*xiaoming, PlatformKindFH::WeChat)) << "（应失败）\n";
+    std::cout << "     为小明绑定微信号 wx-88-0001："
+              << ok(registry.bindWeChat(xiaoming, "wx-88-0001")) << "\n";
+    std::cout << "     绑定后开通微信："
+              << ok(activation.activate(*xiaoming, PlatformKindFH::WeChat)) << "\n";
+    std::cout << "     重复开通 QQ（幂等）："
+              << ok(activation.activate(*xiaoming, PlatformKindFH::QQ)) << "（应失败）\n";
+    std::cout << "     " << xiaoming->getNickname() << " 已开通：";
+    for (PlatformKindFH p : xiaoming->activatedPlatforms())
+        std::cout << toZhName(p) << " ";
+    std::cout << "（共 " << activation.activatedCount(*xiaoming) << " 个微X 服务）\n";
+
+    std::cout << "\n[B3] 微信账号与 QQ 绑定关系（AccountInfoFH）\n";
+    auto wx = registry.makeAccount(*xiaoming, PlatformKindFH::WeChat);
+    std::cout << "     微信号：" << wx.getAccountId() << "，绑定 QQ："
+              << (wx.hasBindQQ() ? wx.getBindQqId() : "无") << "\n";
+
+    std::cout << "\n[B4] 登录联动：登录一个服务 → 其余已开通服务自动登录\n";
+    std::cout << "     小红尚未开通服务，登录 QQ："
+              << ok(login.login(*xiaohong, PlatformKindFH::QQ)) << "（应失败）\n";
+    std::cout << "     小明登录 QQ：" << ok(login.login(*xiaoming, PlatformKindFH::QQ)) << "\n";
+    printOnlinePlatforms("小明", login.onlinePlatforms(*xiaoming));
+
+    std::cout << "\n[B5] 单服务退出与取消开通规则\n";
+    std::cout << "     在线状态直接取消开通微博："
+              << ok(activation.deactivate(*xiaoming, PlatformKindFH::Weibo))
+              << "（应失败，须先退出登录）\n";
+    std::cout << "     退出微博登录："
+              << ok(login.logout(*xiaoming, PlatformKindFH::Weibo)) << "\n";
+    printOnlinePlatforms("小明", login.onlinePlatforms(*xiaoming));
+    std::cout << "     退出微博后取消开通微博："
+              << ok(activation.deactivate(*xiaoming, PlatformKindFH::Weibo)) << "\n";
+    std::cout << "     剩余开通服务：";
+    for (PlatformKindFH p : xiaoming->activatedPlatforms()) std::cout << toZhName(p) << " ";
+    std::cout << "\n======== 阶段 B 自动演示结束 ========\n";
+}
+
 // 交互菜单演示：使用独立于自动演示的“手动演示群”
 int runInteractiveMenu() {
     auto mOwner   = std::make_shared<UserFH>("20001", "手动群主");
@@ -268,5 +353,6 @@ int main() {
     initConsole();
     std::cout << "==== 模拟即时通信平台：QQ 群 / 微信群管理（作者代号 FH） ====\n";
     runAutoScenario();
+    runAutoPlatformScenario();
     return runInteractiveMenu();
 }
