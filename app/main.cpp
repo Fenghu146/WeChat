@@ -23,6 +23,9 @@
 #include "im/platform/user_registry_fh.hpp"
 #include "im/policy/qq_policy_fh.hpp"
 #include "im/policy/wechat_policy_fh.hpp"
+#include "im/social/discussion_group_fh.hpp"
+#include "im/social/friend_registry_fh.hpp"
+#include "im/social/group_registry_fh.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -245,6 +248,101 @@ void runAutoPlatformScenario() {
     std::cout << "\n======== 阶段 B 自动演示结束 ========\n";
 }
 
+// 阶段 C 自动演示：好友/关注 · 群注册表 · QQ 临时讨论组（独立数据）
+void runAutoSocialScenario() {
+    std::cout << "\n======== 自动演示：好友 / 群注册表 / QQ 临时讨论组（阶段 C） ========\n";
+
+    UserRegistryFH registry;
+    auto xiaoming = registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
+    auto xiaohong = registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
+    auto lurenB = registry.registerUser("10003", "路人乙", "2001-03-03", "四川·成都", 2020);
+    auto lurenC = registry.registerUser("10004", "路人丙", "2002-07-07", "湖北·武汉", 2021);
+    std::cout << "     绑定微信：小明 wx-88-0001 / 小红 wx-88-0002："
+              << ok(registry.bindWeChat(xiaoming, "wx-88-0001")) << " / "
+              << ok(registry.bindWeChat(xiaohong, "wx-88-0002")) << "\n";
+
+    FriendRegistryFH friends;
+
+    std::cout << "\n[C1] 好友/关注管理（FriendRegistryFH：QQ/微信=双向好友，微博=单向关注）\n";
+    std::cout << "     小明与小红加 QQ 好友："
+              << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ)) << "\n";
+    std::cout << "     小红视角互为好友（双向关系）："
+              << ok(friends.isFriend(*xiaohong, *xiaoming, PlatformKindFH::QQ)) << "\n";
+    std::cout << "     重复加 QQ 好友："
+              << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ))
+              << "（应失败）\n";
+    std::cout << "     自己加自己："
+              << ok(friends.makeFriends(*xiaoming, *xiaoming, PlatformKindFH::QQ))
+              << "（应失败）\n";
+    std::cout << "     路人乙没有微信号，小明无法加其微信好友："
+              << ok(friends.makeFriends(*xiaoming, *lurenB, PlatformKindFH::WeChat))
+              << "（应失败）\n";
+    std::cout << "     小明与小红加微信好友（双方均已绑定）："
+              << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::WeChat)) << "\n";
+    std::cout << "     微博关注模型：小明关注小红："
+              << ok(friends.follow(*xiaoming, *xiaohong)) << "\n";
+    std::cout << "     微博“关注≠好友”：isFriend(微博) = "
+              << ok(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::Weibo))
+              << "，isFollowing = " << ok(friends.isFollowing(*xiaoming, *xiaohong)) << "\n";
+    std::cout << "     删除 QQ 好友："
+              << ok(friends.unfriend(*xiaoming, *xiaohong, PlatformKindFH::QQ)) << "\n";
+    std::cout << "     QQ 关系删除后微信好友不受影响（平台隔离）："
+              << ok(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::WeChat)) << "\n";
+
+    GroupRegistryFH groupReg;
+    std::cout << "\n[C2] 群注册表（GroupRegistryFH：预置各微X 群号 1001~1006）\n";
+    std::cout << "     系统预置群目录：\n";
+    for (PlatformKindFH p : {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo}) {
+        for (const GroupInfoFH* g : groupReg.groupsOfPlatform(p))
+            std::cout << "       · [" << toZhName(p) << " 群号 " << g->groupId << "] "
+                      << g->name << "（官方群，容量 " << g->maxMembers << "）\n";
+    }
+    std::cout << "     小明加入 QQ 群 1001："
+              << ok(groupReg.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001")) << "\n";
+    std::cout << "     重复加入 QQ 群 1001："
+              << ok(groupReg.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
+              << "（应失败）\n";
+    std::cout << "     小红加入 QQ 群 1001："
+              << ok(groupReg.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001")) << "\n";
+    std::cout << "     小明加入微信群 1003（凭微信号入册）："
+              << ok(groupReg.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003")) << "\n";
+    if (const GroupInfoFH* g = groupReg.findGroup("1003")) {
+        std::cout << "     微信群 1003 当前成员：";
+        for (const std::string& id : g->memberIds) std::cout << id << " ";
+        std::cout << "\n";
+    }
+    std::cout << "     小明在 QQ 自建群“阶段C开发组”（自动分配群号）："
+              << ok(groupReg.createGroup(*xiaoming, PlatformKindFH::QQ, "阶段C开发组")) << "\n";
+    if (const GroupInfoFH* g = groupReg.findGroup("1007"))
+        std::cout << "     自建群号 " << g->groupId << "，群主 " << g->ownerId << " 已自动入群\n";
+    std::cout << "     小明当前群列表：";
+    for (const GroupInfoFH* g : groupReg.groupsOfUser(*xiaoming))
+        std::cout << "[" << toZhName(g->platform) << " " << g->groupId << " "
+                  << g->name << "] ";
+    std::cout << "\n";
+
+    std::cout << "\n[C3] QQ 临时讨论组（DiscussionGroupFH：QQ 特有、容量小、全员可邀请）\n";
+    DiscussionGroupFH disc("讨论组-1", "作业组会", xiaoming->getQQId());
+    std::cout << "     小明创建讨论组：" << disc.getName() << "（id=" << disc.getId()
+              << "，容量 " << disc.capacity() << "，当前 " << disc.size() << " 人）\n";
+    std::cout << "     小明邀请小红："
+              << ok(disc.invite(*xiaoming, *xiaohong)) << "\n";
+    std::cout << "     任何成员可邀请：小红邀请路人乙："
+              << ok(disc.invite(*xiaohong, *lurenB)) << "（区别于正式群需管理员）\n";
+    std::cout << "     路人乙邀请路人丙："
+              << ok(disc.invite(*lurenB, *lurenC)) << "\n";
+    std::cout << "     成员自由退出：小红退组："
+              << ok(disc.quit(*xiaohong)) << "\n";
+    std::cout << "     非发起人解散（路人乙）："
+              << ok(disc.disband(*lurenB)) << "（应失败）\n";
+    std::cout << "     发起人解散（小明）："
+              << ok(disc.disband(*xiaoming)) << "\n";
+    std::cout << "     解散后再邀请："
+              << ok(disc.invite(*xiaoming, *xiaohong)) << "（应失败）\n";
+    std::cout << "     （微信群无“临时讨论组”概念 —— 平台差异演示点）\n";
+    std::cout << "======== 阶段 C 自动演示结束 ========\n";
+}
+
 // 交互菜单演示：使用独立于自动演示的“手动演示群”
 int runInteractiveMenu() {
     auto mOwner   = std::make_shared<UserFH>("20001", "手动群主");
@@ -354,5 +452,6 @@ int main() {
     std::cout << "==== 模拟即时通信平台：QQ 群 / 微信群管理（作者代号 FH） ====\n";
     runAutoScenario();
     runAutoPlatformScenario();
+    runAutoSocialScenario();
     return runInteractiveMenu();
 }

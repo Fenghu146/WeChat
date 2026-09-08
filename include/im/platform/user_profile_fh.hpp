@@ -40,6 +40,24 @@ public:
     const std::string& getWeChatId() const noexcept { return wechatId_; }
     bool hasWeChatAccount() const noexcept { return !wechatId_.empty(); }
 
+    // 解析该自然人在指定微X 平台的账号号码：QQ/微博共享主号；
+    // 微信独立，未绑定微信号时返回空串。
+    std::string platformAccountId(PlatformKindFH platform) const noexcept {
+        switch (platform) {
+            case PlatformKindFH::QQ:
+            case PlatformKindFH::Weibo:
+                return qqId_;
+            case PlatformKindFH::WeChat:
+                return wechatId_;
+            default:
+                return {};
+        }
+    }
+    // 该自然人是否拥有某平台的账号（即能否在该平台加好友/入群）
+    bool hasPlatformAccount(PlatformKindFH platform) const noexcept {
+        return !platformAccountId(platform).empty();
+    }
+
     // 为自然人绑定一个微信号（每人至多一个、号码不可为空）
     bool bindWeChat(std::string wechatId) noexcept {
         if (wechatId.empty() || !wechatId_.empty()) return false;
