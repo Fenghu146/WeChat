@@ -54,6 +54,20 @@ std::shared_ptr<MessageFH> makeMessage(const std::shared_ptr<UserFH>& sender,
                                        sender, content);
 }
 
+// 将时间点格式化为 “MM-DD HH:MM:SS”，供成员/消息时间展示
+std::string formatClock(std::chrono::system_clock::time_point tp) {
+    std::time_t t = std::chrono::system_clock::to_time_t(tp);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &t);
+#else
+    localtime_r(&t, &local);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%m-%d %H:%M:%S", &local);
+    return buf;
+}
+
 void printMembers(const std::string& title, const GroupFH& group) {
     std::cout << "  [" << title << "] " << group.getName()
               << "（群号 " << group.getGroupNumber() << "），成员数 "
@@ -63,6 +77,7 @@ void printMembers(const std::string& title, const GroupFH& group) {
         std::cout << "     - " << m.getUser()->getNickname()
                   << "（ID " << m.getUser()->getId() << "）角色："
                   << toZhName(m.getRole())
+                  << "，加入 " << formatClock(m.getJoinedAt())
                   << (m.isMuted() ? " ［被禁言］" : "") << "\n";
     }
 }

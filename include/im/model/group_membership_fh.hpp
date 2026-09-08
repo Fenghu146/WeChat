@@ -6,6 +6,7 @@
 // 角色（GroupRoleFH）与禁言状态只属于这里，不属于 UserFH。
 // 这正是“同一用户在不同群可有不同角色”的建模基础。
 // ============================================================
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -19,14 +20,22 @@ public:
 
     GroupMembershipFH(std::shared_ptr<UserFH> user,
                       GroupRoleFH role = GroupRoleFH::MEMBER,
-                      bool muted = false)
-        : user_(std::move(user)), role_(role), muted_(muted) {
+                      bool muted = false,
+                      std::chrono::system_clock::time_point joinedAt =
+                          std::chrono::system_clock::now())
+        : user_(std::move(user)), role_(role), muted_(muted),
+          joinedAt_(joinedAt) {
         if (!user_) throw std::invalid_argument("GroupMembershipFH: user is required");
     }
 
     const std::shared_ptr<UserFH>& getUser() const noexcept { return user_; }
     GroupRoleFH getRole() const noexcept { return role_; }
     bool isMuted() const noexcept { return muted_; }
+
+    // 入群时刻：为真实项目迁移保留的成员关系时间线字段（建群/入群/转让时记录）
+    std::chrono::system_clock::time_point getJoinedAt() const noexcept {
+        return joinedAt_;
+    }
 
     void setRole(GroupRoleFH role) noexcept { role_ = role; }
     void setMuted(bool muted) noexcept { muted_ = muted; }
@@ -35,4 +44,6 @@ private:
     std::shared_ptr<UserFH> user_;
     GroupRoleFH role_{GroupRoleFH::MEMBER};
     bool muted_{false};
+    std::chrono::system_clock::time_point joinedAt_{
+        std::chrono::system_clock::now()};
 };

@@ -18,6 +18,23 @@ Action + GroupContext → 统一权限判断
 
 ---
 
+## 落地状态（阶段 A~D 已实现，2026-09）
+
+> 本文下方各“负责文件”清单为**早期规划命名**（无 FH 后缀、计划拆分
+> `src/model/*.cpp`）。集成分支 FH 的最终形态已统一为 **FH 命名 + header-only
+> 领域模型**，仅策略实现保留在 `src/policy/`，自动化测试已接入 ctest。规则本身
+> （含下文的平台差异表与验收清单）均与实现一致，以下为映射关系：
+
+| 早期规划 | 落地（分支 FH） |
+|---|---|
+| `include/group/model/{user,group_role,group_membership,group_config,message,group}.hpp` | `include/im/model/*_fh.hpp`（全部 header-only，无 `src/model/*.cpp`） |
+| `include/group/context/{action,group_context}.hpp` | `include/im/context/*_fh.hpp` |
+| `include/group/policy/{group_policy,abstract_group_policy,qq_policy,wechat_policy}.hpp` + `src/policy/*.cpp` | `include/im/policy/*_fh.hpp` + `src/policy/*_fh.cpp` |
+| 阶段 B~D 新增 | `include/im/platform/`、`include/im/social/`、`include/im/message/` |
+| `tests/{integration_tests,policy_tests}.cpp` | `tests/{group_core,abstract_policy,qq_wechat_policy,platform_service,social_message}_test.cpp`（自包含断言，经 ctest 一键运行） |
+
+---
+
 ## 分工总览
 
 | 角色 | 职责 | 对应原成员 |
@@ -181,7 +198,7 @@ tests/policy_tests.cpp
 
 | 方法 | QQ | 微信 |
 |---|---|---|
-| `checkPlatformRule` | 全员禁言时 admin+owner 可发消息；`memberInviteEnabled=true` 时普通成员可邀请；admin+owner 可设全员禁言 | 全员禁言时 admin+owner 可发消息；只有 owner 可邀请；只有 owner 可设全员禁言 |
+| `checkPlatformRule` | 全员禁言时 admin+owner 可发消息；`memberInviteEnabled=true` 时普通成员可邀请；admin+owner 可设全员禁言 | 全员禁言时 admin+owner 可发消息；仅 ADMIN+ 可邀请（普通成员不可）；只有 owner 可设全员禁言 |
 | `getMaxGroupSize` | 读取 `GroupConfig.maxMembers` | 读取 `GroupConfig.maxMembers` |
 
 ### 平台差异测试（C 负责）

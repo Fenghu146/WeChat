@@ -49,6 +49,25 @@ cmake --build build --config Debug
 ```
 
 运行后无需任何输入即可看到 A→D 四段自动演示；之后出现交互菜单，
+
+### 自动化测试（阶段 E · 迁移回归保障）
+
+自包含断言框架（`tests/fh_mini_test.hpp`），离线环境无需下载 GoogleTest：
+
+```bash
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure     # 预期：5/5 全部通过
+```
+
+五个回归套件与阶段对应：
+
+| 套件 | 覆盖 | 对应阶段 |
+|---|---|---|
+| `group_core_test` | 领域实体校验、聚合根 11 种操作、撤回时间窗、转让/解散、切换模式 | A |
+| `abstract_policy_test` | 六步授权链、成员关系、禁言状态、撤回归属与窗口边界 | A |
+| `qq_wechat_policy_test` | QQ/微信差异矩阵（邀请、全员禁言、发言） | A |
+| `platform_service_test` | 多产品号码体系、开通资格、登录联动 | B |
+| `social_message_test` | 好友/关注隔离、群注册表、临时讨论组、消息能力与记录上限 | C/D |
 按提示操作可手动建群、邀请、禁言、撤回、转让群主等，输入 `0` 退出。
 
 ## 4. 各阶段功能与规则

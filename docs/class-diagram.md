@@ -43,7 +43,7 @@ classDiagram
         +maxMembers
         +memberInviteEnabled
         +allMuted
-        +recallWindow
+        +recallTimeLimit
     }
     class MessageFH {
         +kind_
