@@ -17,11 +17,29 @@ add_library(im_core_fh
     src/policy/wechat_policy_fh.cpp)
 target_include_directories(im_core_fh PUBLIC include)
 
-# 控制台演示程序
-add_executable(demo_fh app/main.cpp)
+# 控制台演示程序：main 负责自动演示(--demo)入口，client_ui 实现手动测试工作台
+add_executable(demo_fh app/main.cpp app/client_ui.cpp)
 target_link_libraries(demo_fh PRIVATE im_core_fh)
 
-# 测试（阶段 E 接入 GoogleTest；离线环境可用 <cassert> 简易测试代替）
-# enable_testing()
-# add_executable(im_tests_fh tests/xxx.cpp)
-# target_link_libraries(im_tests_fh PRIVATE im_core_fh)
+# ============================================================
+# 阶段 E：自动化测试（为真实项目迁移提供回归保障）
+#   使用 tests/fh_mini_test.hpp 自包含断言框架 —— 离线课程环境
+#   无需下载 GoogleTest；每个测试文件生成独立可执行程序，由 ctest
+#   汇总执行（后续接入 GoogleTest 时仅需替换断言宏）。
+#   运行：cmake --build build 后 ctest --test-dir build -C Debug
+# ============================================================
+enable_testing()
+set(FH_TEST_TARGETS
+    group_core_test
+    abstract_policy_test
+    qq_wechat_policy_test
+    platform_service_test
+    social_message_test
+    regression_tests
+    e2e_integration_test
+    requirement_alignment_test)
+foreach(tgt IN LISTS FH_TEST_TARGETS)
+    add_executable(${tgt} tests/${tgt}.cpp)
+    target_link_libraries(${tgt} PRIVATE im_core_fh)
+    add_test(NAME ${tgt} COMMAND ${tgt})
+endforeach()

@@ -1,9 +1,10 @@
 # QQ / 微信群组管理课程设计项目设计文档（C++ 版 · 合并版）
 
-> 版本：2.0（合并版）
-> 语言与工具链：C++17、CMake、GoogleTest（课程环境不便时可退化为标准库 `assert`）
+> 版本：2.1（FH 分支落地修订，2026-09）
+> 语言与工具链：C++17、CMake、GoogleTest（课程环境不便时可退化为标准库 `assert`；FH 分支已落地自包含断言 + ctest）
 > 核心主题：Strategy Pattern + Template Method 处理 QQ / 微信群组行为差异
 > 说明：本文合并并取代原 Java 版设计文档（`group-platform-policy-design.md`）与本文件的历史初稿，两版冲突的裁决记录见附录 A。
+> FH 落地说明：正文规则为权威基线；代码实现统一 **FH 后缀 + `include/im/`** 布局（阶段 A~D 全部完成，回归测试已接入 ctest）。正文中的 `include/group/...` 路径与无后缀类名均为早期参考骨架表述，实际以 `include/im/*_fh.hpp` 为准（完整映射见 `cpp-implementation-division.md`“落地状态”表）。
 
 ## 1. 项目概述
 
@@ -122,10 +123,10 @@ Group ── 1..* ── GroupMembership ── 1 ── User
 
 | Action | QQPolicy | WeChatPolicy |
 |---|---|---|
-| `INVITE_MEMBER` | `memberInviteEnabled` 开启时普通成员可邀请；关闭时仅 ADMIN+ | 仅 ADMIN+ 可邀请，普通成员禁止 |
+| `INVITE_MEMBER` | `memberInviteEnabled` 开启时普通成员可邀请；关闭时仅 ADMIN+ | 仅 OWNER 可邀请（“微信群只能推荐加入”，任务书 3.(3)），ADMIN/普通成员均禁止 |
 | `SET_ALL_MUTE` | ADMIN+ 可执行 | 仅 OWNER 可执行 |
 
-> 裁决说明：初稿矩阵中“微信邀请默认禁止 / 管理员以上”与代码（`isPrivileged`）存在矛盾，合并版统一为“仅 ADMIN+ 可邀请”；“微信管理员能否设置全员禁言”在两版文档中表述不一，合并版统一为“仅群主”。
+> 裁决说明：初稿矩阵中“微信邀请默认禁止 / 管理员以上”与代码（`isPrivileged`）存在矛盾，合并版曾统一为“仅 ADMIN+ 可邀请”。后对照课程任务书 3.(3)“QQ 群有以群主为核心的管理员制度而微信群仅有群主为特权账号”，最终口径为**微信群仅 OWNER 可邀请**（注册表推荐制入群 `inviteIntoGroup` 同口径），管理员在微信群不产生任何特权；从 QQ 群动态切换为微信群时成员与角色数据保留，权限按微信口径重新解释。
 
 #### 3.3.3 公共状态约束（两平台一致，置于父类）
 
@@ -487,7 +488,8 @@ protected:
 bool WeChatPolicy::checkPlatformRule(Action action, const GroupContext& c) const {
     switch (action) {
     case Action::INVITE_MEMBER:
-        return isPrivileged(c);                   // 微信：仅管理员以上
+        // 微信：仅群主可推荐加入（任务书 3.(3)：微信群仅有群主为特权账号）
+        return c.group->getRole(c.operatorUser) == GroupRole::OWNER;
     case Action::SET_ALL_MUTE:
         return c.group->getRole(c.operatorUser) == GroupRole::OWNER;  // 仅群主
     default:
