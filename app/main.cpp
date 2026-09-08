@@ -6,11 +6,14 @@
 // 编译：cmake --build build 后运行 demo_fh。
 // ============================================================
 #include <chrono>
+#include <ctime>
 #include <iostream>
 #include <memory>
 #include <set>
 #include <string>
 
+#include "im/message/message_kind_fh.hpp"
+#include "im/message/platform_message_policy_fh.hpp"
 #include "im/model/group_fh.hpp"
 #include "im/model/group_role_fh.hpp"
 #include "im/model/message_fh.hpp"
@@ -343,6 +346,131 @@ void runAutoSocialScenario() {
     std::cout << "======== 阶段 C 自动演示结束 ========\n";
 }
 
+// 阶段 D 自动演示：群消息类型平台差异 / 群消息记录与引用扩展 / 产品视图示意
+void runAutoMessageScenario() {
+    std::cout << "\n======== 自动演示：群消息平台差异与群消息扩展（阶段 D） ========\n";
+
+    auto toTimeText = [](std::chrono::system_clock::time_point t) -> std::string {
+        const std::time_t tt = std::chrono::system_clock::to_time_t(t);
+        std::tm tm{};
+#ifdef _WIN32
+        localtime_s(&tm, &tt);
+#else
+        localtime_r(&tt, &tm);
+#endif
+        char buf[16] = {0};
+        std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm);
+        return std::string(buf);
+    };
+
+    // MessageFH 类型扩展示意（阶段 A 消息实体可声明消息类型）
+    auto msgUser = std::make_shared<UserFH>("10001", "小明");
+    auto voiceMsg =
+        std::make_shared<MessageFH>("dm-voice", msgUser, "（60 秒语音）",
+                                    MessageKindFH::VOICE);
+    std::cout << "     MessageFH 类型扩展：消息 "
+              << voiceMsg->getId() << " 的类型为“" << voiceMsg->kindZhName()
+              << "”（缺省仍为文本）\n";
+
+    std::cout << "\n[D1] 消息类型 / 文本长度能力（PlatformMessagePolicyFH）\n";
+    UserRegistryFH registry;
+    auto xiaoming =
+        registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
+    auto xiaohong =
+        registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
+    std::cout << "     绑定微信（小明 wx-88-0001）："
+              << ok(registry.bindWeChat(xiaoming, "wx-88-0001")) << "\n";
+
+    GroupRegistryFH groups;
+    std::cout << "     小明入群 QQ 1001 / 微信 1003 / 微博 1005："
+              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
+              << " / "
+              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
+              << " / "
+              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::Weibo, "1005"))
+              << "\n";
+    std::cout << "     小红入群 QQ 1001："
+              << ok(groups.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001"))
+              << "\n";
+
+    std::cout << "     小明在 QQ 群 1001 发文件「架构图.pdf」："
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ,
+                                            "1001", MessageKindFH::FILE,
+                                            "架构图.pdf"))
+              << "（QQ 支持全部类型）\n";
+    std::cout << "     小明在微信群 1003 发文件「合同.docx」："
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat,
+                                            "1003", MessageKindFH::FILE,
+                                            "合同.docx"))
+              << "（应失败：微信群禁文件，简化口径）\n";
+    std::cout << "     小明在微信群 1003 发图片「晚霞.jpg」："
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat,
+                                            "1003", MessageKindFH::IMAGE,
+                                            "晚霞.jpg"))
+              << "\n";
+    std::cout << "     小明在微博群 1005 发图片「热点截图.jpg」："
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
+                                            "1005", MessageKindFH::IMAGE,
+                                            "热点截图.jpg"))
+              << "（应失败：微博群仅文本/表情，简化口径）\n";
+    std::cout << "     小明在微博群 1005 发文本「今晚一起讨论任务书」："
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
+                                            "1005", MessageKindFH::TEXT,
+                                            "今晚一起讨论任务书"))
+              << "\n";
+    const std::string weiboTooLong(1001, '长');
+    std::cout << "     小明在微博群 1005 发超长文本（>1000 字）："
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
+                                            "1005", MessageKindFH::TEXT,
+                                            weiboTooLong))
+              << "（应失败）\n";
+
+    std::cout << "\n[D2] 群消息增强：引用回复按平台能力校验\n";
+    std::cout << "     小红在 QQ 群 1001 引用回复小明："
+              << ok(groups.sendGroupMessage(*xiaohong, PlatformKindFH::QQ,
+                                            "1001", MessageKindFH::TEXT,
+                                            "回复@小明：收到", /*asReply=*/true))
+              << "（QQ/微信支持引用）\n";
+    std::cout << "     小明在微博群 1005 引用回复："
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
+                                            "1005", MessageKindFH::TEXT,
+                                            "回复@小红：收到", /*asReply=*/true))
+              << "（应失败：微博不支持引用）\n";
+
+    std::cout << "\n[D3] 群消息记录与产品视图渲染（GroupRegistryFH 记录留档）\n";
+    std::cout << "     QQ 群 1001 聊天记录（QQ 视图）：\n";
+    for (const GroupChatRecordFH& r : groups.chatOf("1001"))
+        std::cout << "       · " << PlatformMessagePolicyFH::render(
+                                        PlatformKindFH::QQ, r.senderNick,
+                                        r.content, r.kind,
+                                        toTimeText(r.sentAt))
+                  << (r.isReply ? "（引用回复）" : "") << "\n";
+    std::cout << "     微信群 1003 聊天记录（微信视图）：\n";
+    for (const GroupChatRecordFH& r : groups.chatOf("1003"))
+        std::cout << "       · " << PlatformMessagePolicyFH::render(
+                                        PlatformKindFH::WeChat, r.senderNick,
+                                        r.content, r.kind,
+                                        toTimeText(r.sentAt))
+                  << "\n";
+    std::cout << "     微博群 1005 聊天记录（微博视图）：\n";
+    for (const GroupChatRecordFH& r : groups.chatOf("1005"))
+        std::cout << "       · " << PlatformMessagePolicyFH::render(
+                                        PlatformKindFH::Weibo, r.senderNick,
+                                        r.content, r.kind,
+                                        toTimeText(r.sentAt))
+                  << "\n";
+    std::cout << "     同一条内容在不同产品下的视图形态示意（呈现层差异）：\n";
+    const std::string sharedText = "今晚八点开会，记得@小红";
+    for (PlatformKindFH p :
+         {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo})
+        std::cout << "       · " << PlatformMessagePolicyFH::render(
+                                        p, "小明", sharedText,
+                                        MessageKindFH::TEXT, "20:00:00")
+                  << "\n";
+    std::cout << "     （视图仅为示意；实际能否发送由 D1/D2 的平台规则决定）\n";
+    std::cout << "======== 阶段 D 自动演示结束 ========\n";
+}
+
 // 交互菜单演示：使用独立于自动演示的“手动演示群”
 int runInteractiveMenu() {
     auto mOwner   = std::make_shared<UserFH>("20001", "手动群主");
@@ -453,5 +581,6 @@ int main() {
     runAutoScenario();
     runAutoPlatformScenario();
     runAutoSocialScenario();
+    runAutoMessageScenario();
     return runInteractiveMenu();
 }
