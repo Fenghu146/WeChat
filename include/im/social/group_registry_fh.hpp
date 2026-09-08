@@ -37,29 +37,8 @@
 #include "im/platform/platform_kind_fh.hpp"
 #include "im/platform/user_profile_fh.hpp"
 #include "im/platform/persist_util_fh.hpp"
-
-// 群聊消息记录（群消息扩展，阶段 D）
-struct GroupChatRecordFH {
-    MessageKindFH kind = MessageKindFH::TEXT;   // 消息类型
-    std::string senderId;    // 发送者在该平台的账号号码
-    std::string senderNick;  // 发送者昵称（供各产品视图渲染）
-    std::string content;     // 文本内容 / 资源描述
-    bool isReply = false;    // 是否为引用回复（按平台能力校验）
-    std::chrono::system_clock::time_point sentAt;
-};
-
-// 群目录条目（值对象）
-struct GroupInfoFH {
-    PlatformKindFH platform = PlatformKindFH::QQ;
-    std::string groupId;       // 群号
-    std::string name;          // 群名
-    std::string ownerId;       // 创建者在该平台的账号号码（预置群为空=官方群）
-    std::size_t maxMembers = 50;
-    std::vector<std::string> memberIds;  // 成员在该平台的账号号码
-    std::vector<std::string> adminIds;   // 管理员（仅 QQ 群的管理员制度使用）
-    bool predefined = false;             // 是否为系统预置群
-    std::vector<GroupChatRecordFH> chat; // 群聊消息记录（阶段 D）
-};
+#include "im/social/group_chat_record_fh.hpp"
+#include "im/social/group_info_fh.hpp"
 
 class GroupRegistryFH {
 public:

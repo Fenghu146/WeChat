@@ -314,6 +314,22 @@ void runAutoSocialScenario() {
     std::cout << "     小明加路人丙为微信好友："
               << ok(friends.makeFriends(*xiaoming, *lurenC, PlatformKindFH::WeChat)) << "\n";
 
+    // 任务书 6.(3)：仅限“本人已开通”的服务之间互推好友
+    ActivationManagerFH act;
+    std::cout << "     路人丙未开通服务时依据 QQ 好友推荐微信好友候选："
+              << friends.recommendFriendsFrom(*lurenC, registry, PlatformKindFH::QQ,
+                                              PlatformKindFH::WeChat).size()
+              << " 个（应为 0：本人未开通）\n";
+    std::cout << "     开通服务：小红 QQ+微信 / 路人丙 QQ+微信："
+              << ok(act.activate(*xiaohong, PlatformKindFH::QQ)) << " / "
+              << ok(act.activate(*xiaohong, PlatformKindFH::WeChat)) << " / "
+              << ok(act.activate(*lurenC, PlatformKindFH::QQ)) << " / "
+              << ok(act.activate(*lurenC, PlatformKindFH::WeChat)) << "\n";
+    std::cout << "     路人丙开通后依据 QQ 好友推荐微信好友候选："
+              << friends.recommendFriendsFrom(*lurenC, registry, PlatformKindFH::QQ,
+                                              PlatformKindFH::WeChat).size()
+              << " 个（=小红）\n";
+
     // 跨服务推荐添加好友（任务书 6.(3)：微信可以添加 QQ 推荐好友）
     {
         const auto rec = friends.recommendFriendsFrom(

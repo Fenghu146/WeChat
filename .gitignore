@@ -2,3 +2,6 @@ build/
 out/
 *.user
 .vs/
+save_*.dat
+demo_save_*.dat
+~$*.docx

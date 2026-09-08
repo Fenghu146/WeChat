@@ -1519,9 +1519,10 @@ void runContacts() {
             const auto rec = g.friends.recommendFriendsFrom(
                 *g.me, g.registry, from, to);
             if (rec.empty()) {
-                noticeInfo(std::string("暂无可推荐：对方须已是你的") +
-                           toZhName(from) + "好友、绑定了" + toZhName(to) +
-                           "，且尚非你的" + toZhName(to) + "好友。");
+                noticeInfo(std::string("暂无可推荐：你须已开通来源与目标服务") +
+                           "（任务书 6.(3)），对方须已是你的" + toZhName(from) +
+                           "好友、绑定了" + toZhName(to) + "，且尚非你的" +
+                           toZhName(to) + "好友。");
                 continue;
             }
             std::vector<std::string> labels;
