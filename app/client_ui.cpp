@@ -1335,21 +1335,31 @@ void runServiceCenter() {
 
 void drawFriendLists() {
     const auto& p = g.me;
-    const auto listQQ = g.friends.friendIds(*p, PlatformKindFH::QQ);
-    const auto listWX = g.friends.friendIds(*p, PlatformKindFH::WeChat);
-    const auto fol = g.friends.followingIds(*p);
-    std::cout << "  —— QQ 好友（" << listQQ.size() << "）——\n";
-    if (listQQ.empty()) std::cout << "    (空)\n";
-    for (const auto& id : listQQ)
-        std::cout << "    · " << nickOf(PlatformKindFH::QQ, id) << "\n";
-    std::cout << "  —— 微信好友（" << listWX.size() << "）——\n";
-    if (listWX.empty()) std::cout << "    (空)\n";
-    for (const auto& id : listWX)
-        std::cout << "    · " << nickOf(PlatformKindFH::WeChat, id) << "\n";
-    std::cout << "  —— 微博关注（" << fol.size() << "，单向）——\n";
-    if (fol.empty()) std::cout << "    (空)\n";
-    for (const auto& id : fol)
-        std::cout << "    · " << nickOf(PlatformKindFH::Weibo, id) << "\n";
+    auto findProfile = [](PlatformKindFH pl,
+                          const std::string& id) -> ProfilePtr {
+        for (const auto& q : g.people)
+            if (q->platformAccountId(pl) == id) return q;
+        return nullptr;
+    };
+    auto showList = [&](const std::string& title, PlatformKindFH pl,
+                        const std::vector<std::string>& ids) {
+        std::cout << "  —— " << title << "（" << ids.size() << "）——\n";
+        if (ids.empty()) std::cout << "    (空)\n";
+        for (const auto& id : ids) {
+            std::string line = "    · " + nickOf(pl, id);
+            if (ProfilePtr q = findProfile(pl, id)) {
+                const std::string rk = g.friends.remarkOf(*p, *q, pl);
+                if (!rk.empty()) line += "（备注：" + rk + "）";
+            }
+            std::cout << line << "\n";
+        }
+    };
+    showList("QQ 好友", PlatformKindFH::QQ,
+             g.friends.friendIds(*p, PlatformKindFH::QQ));
+    showList("微信好友", PlatformKindFH::WeChat,
+             g.friends.friendIds(*p, PlatformKindFH::WeChat));
+    showList("微博关注（单向）", PlatformKindFH::Weibo,
+             g.friends.followingIds(*p));
 }
 
 void runContacts() {
@@ -1360,7 +1370,8 @@ void runContacts() {
         std::cout << "  ------------------------------------------------------------------\n";
         std::cout << "  [1]添加QQ好友  [2]添加微信好友  [3]微博关注\n"
                      "  [4]删除QQ好友  [5]删除微信好友  [6]取消微博关注\n"
-                     "  [7]刷新 [0]返回\n";
+                     "  [7]修改好友备注  [8]查询共同好友  [9]跨服务推荐添加\n"
+                     "  [R]刷新 [0]返回\n";
         std::cout << "  " << g.notice << "\n";
         g.notice.clear();
         std::cout << "  请按键选择：";
@@ -1426,7 +1437,114 @@ void runContacts() {
                     noticeFail("取消关注失败：你并未关注对方。");
             }
             continue;
-        case '7':
+        case '7': {  // 修改好友备注（任务书 2.(1) 好友信息“修改”）
+            const int pl =
+                chooseByLabels("  给哪个平台的好友写备注？> ",
+                               {"QQ 好友", "微信好友"});
+            if (pl >= 0 &&
+                needPick(pl == 0 ? PlatformKindFH::QQ : PlatformKindFH::WeChat,
+                         "  选择要备注的好友> ")) {
+                const auto remark = askText("  输入备注名（直接回车取消）> ");
+                if (remark) {
+                    const PlatformKindFH pf = pl == 0 ? PlatformKindFH::QQ
+                                                      : PlatformKindFH::WeChat;
+                    if (g.friends.setRemark(*g.me, *target, pf, *remark))
+                        noticeOK("已将 " + target->getNickname() +
+                                 " 备注为「" + *remark + "」。");
+                    else
+                        noticeFail("备注失败：对方需是你的双向好友"
+                                   "（微博关注不支持备注）。");
+                } else {
+                    noticeFail("已取消。");
+                }
+            }
+            continue;
+        }
+        case '8': {  // 查询共同好友（任务书 2.(2)）
+            const int w =
+                chooseByLabels("  查询哪类共同关系？> ",
+                               {"QQ 共同好友", "微信共同好友", "微博共同关注"});
+            PlatformKindFH pf = PlatformKindFH::QQ;
+            bool okPick = false;
+            if (w == 0)
+                okPick = needPick(PlatformKindFH::QQ, "  选择要对比的人> ");
+            else if (w == 1) {
+                pf = PlatformKindFH::WeChat;
+                okPick = needPick(PlatformKindFH::WeChat, "  选择要对比的人> ");
+            } else if (w == 2) {
+                pf = PlatformKindFH::Weibo;
+                okPick = needPick(PlatformKindFH::Weibo, "  选择要对比的人> ");
+            } else {
+                noticeFail("已取消。");
+                continue;
+            }
+            if (!okPick) {
+                noticeFail("已取消。");
+                continue;
+            }
+            busy("共同好友计算");
+            std::vector<std::string> ids;
+            std::string title;
+            if (w <= 1) {
+                ids = g.friends.commonFriends(*g.me, *target, pf);
+                title = "你与 " + target->getNickname() + " 在" +
+                        platCn(pf) + "的共同好友";
+            } else {
+                ids = g.friends.commonFollowing(*g.me, *target);
+                title =
+                    "你与 " + target->getNickname() + " 在微博的共同关注";
+            }
+            std::cout << "  " << title << "（" << ids.size() << " 人）：\n";
+            if (ids.empty()) std::cout << "    (空)\n";
+            for (const auto& id : ids)
+                std::cout << "    · " << nickOf(pf, id) << " [" << id
+                          << "]\n";
+            std::cout << "  按任意键返回：";
+            waitKey();
+            continue;
+        }
+        case '9': {  // 跨服务推荐添加好友（任务书 2.(2)/6.(3)）
+            const int d = chooseByLabels(
+                "  依据哪个服务的现有好友？> ",
+                {"依据 QQ 好友 → 添加微信好友", "依据微信好友 → 添加 QQ 好友"});
+            if (d < 0) {
+                noticeFail("已取消。");
+                continue;
+            }
+            const PlatformKindFH from =
+                d == 0 ? PlatformKindFH::QQ : PlatformKindFH::WeChat;
+            const PlatformKindFH to =
+                d == 0 ? PlatformKindFH::WeChat : PlatformKindFH::QQ;
+            busy("推荐计算");
+            const auto rec = g.friends.recommendFriendsFrom(
+                *g.me, g.registry, from, to);
+            if (rec.empty()) {
+                noticeInfo(std::string("暂无可推荐：对方须已是你的") +
+                           toZhName(from) + "好友、绑定了" + toZhName(to) +
+                           "，且尚非你的" + toZhName(to) + "好友。");
+                continue;
+            }
+            std::vector<std::string> labels;
+            for (const auto* q : rec)
+                labels.push_back(std::string(q->getNickname()) + "（" +
+                                 toZhName(from) + "好友 → " + toZhName(to) +
+                                 " " + q->platformAccountId(to) + "）");
+            const int idx =
+                chooseByLabels("  选择要添加为好友的人> ", labels);
+            if (idx < 0) {
+                noticeFail("已取消。");
+                continue;
+            }
+            if (g.friends.addFriendFromRecommendation(*g.me, *rec[idx], from,
+                                                      to))
+                noticeOK(std::string("已依据") + toZhName(from) +
+                         "好友关系，将 " + rec[idx]->getNickname() + " 添加为" +
+                         toZhName(to) + "好友。");
+            else
+                noticeFail("添加失败。");
+            continue;
+        }
+        case 'r':
             continue;
         case '0':
             return;
@@ -1701,6 +1819,21 @@ bool runWorkspace() {
     }
 }
 
+// ============================================================
+// 断电保存（任务书 6.(1)/优化(2)）：系统启动时把开通服务情况、
+// 群成员信息和好友信息从文件加载到内存；三类信息各一个存档文件，
+// 容器析构（程序退出）时自动写回。
+// ============================================================
+void loadWorldFromDisk() {
+    const bool okAct = g.registry.setActivationPath("save_activation_fh.dat");
+    const bool okFri = g.friends.setPersistencePath("save_friends_fh.dat");
+    const bool okGrp = g.official.setPersistencePath("save_groups_fh.dat");
+    if (okAct || okFri || okGrp)
+        noticeInfo("已从存档文件恢复开通/好友/群数据（退出时自动写回）。");
+    else
+        noticeInfo("未发现存档：本次运行数据将在退出时写入存档文件。");
+}
+
 }  // namespace
 
 namespace fh_client {
@@ -1708,6 +1841,7 @@ namespace fh_client {
 int runClientUi() {
     initUiConsole();
     seedWorld();
+    loadWorldFromDisk();  // 任务书 6.(1)：启动时从文件加载到内存
     for (;;) {
         if (!runAccountGate()) return 0;
         if (!runWorkspace()) return 0;

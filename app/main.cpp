@@ -6,6 +6,7 @@
 // 编译：cmake --build build 后运行 demo_fh。
 // ============================================================
 #include <chrono>
+#include <cstdio>
 #include <ctime>
 #include <iostream>
 #include <memory>
@@ -298,6 +299,47 @@ void runAutoSocialScenario() {
               << "（应失败）\n";
     std::cout << "     小明与小红加微信好友（双方均已绑定）："
               << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::WeChat)) << "\n";
+
+    // 共同好友（任务书 2.(2)：查询微X 之间各自共同好友）
+    std::cout << "     绑定微信：路人丙 wx-88-0004："
+              << ok(registry.bindWeChat(lurenC, "wx-88-0004")) << "\n";
+    std::cout << "     小明、小红分别加路人丙为 QQ 好友："
+              << ok(friends.makeFriends(*xiaoming, *lurenC, PlatformKindFH::QQ)) << " / "
+              << ok(friends.makeFriends(*xiaohong, *lurenC, PlatformKindFH::QQ)) << "\n";
+    std::cout << "     小明与小红在 QQ 的共同好友：";
+    for (const std::string& id :
+         friends.commonFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ))
+        std::cout << id << " ";
+    std::cout << "\n";
+    std::cout << "     小明加路人丙为微信好友："
+              << ok(friends.makeFriends(*xiaoming, *lurenC, PlatformKindFH::WeChat)) << "\n";
+
+    // 跨服务推荐添加好友（任务书 6.(3)：微信可以添加 QQ 推荐好友）
+    {
+        const auto rec = friends.recommendFriendsFrom(
+            *xiaohong, registry, PlatformKindFH::QQ, PlatformKindFH::WeChat);
+        std::cout << "     小红依据 QQ 好友得到的微信推荐候选（"
+                  << rec.size() << " 人）：";
+        for (const auto* q : rec) std::cout << q->getNickname() << " ";
+        std::cout << "\n";
+        std::cout << "     小红一键添加 QQ 推荐好友（路人丙 → 微信好友）："
+                  << ok(friends.addFriendFromRecommendation(
+                          *xiaohong, *lurenC, PlatformKindFH::QQ,
+                          PlatformKindFH::WeChat)) << "\n";
+        std::cout << "     添加后小明与小红在微信的共同好友：";
+        for (const std::string& id :
+             friends.commonFriends(*xiaoming, *xiaohong, PlatformKindFH::WeChat))
+            std::cout << id << " ";
+        std::cout << "\n";
+    }
+
+    // 好友信息修改（任务书 2.(1)：备注名，视角属于设置者）
+    std::cout << "     修改好友备注：小红把小明备注为「老同学」："
+              << ok(friends.setRemark(*xiaohong, *xiaoming,
+                                      PlatformKindFH::QQ, "老同学")) << "\n";
+    std::cout << "     查询备注（小红视角）："
+              << friends.remarkOf(*xiaohong, *xiaoming, PlatformKindFH::QQ) << "\n";
+
     std::cout << "     微博关注模型：小明关注小红："
               << ok(friends.follow(*xiaoming, *xiaohong)) << "\n";
     std::cout << "     微博“关注≠好友”：isFriend(微博) = "
@@ -362,6 +404,58 @@ void runAutoSocialScenario() {
     std::cout << "     解散后再邀请："
               << ok(disc.invite(*xiaoming, *xiaohong)) << "（应失败）\n";
     std::cout << "     （微信群无“临时讨论组”概念 —— 平台差异演示点）\n";
+
+    std::cout << "\n[C4] 断电保存（任务书 6.(1)/优化(2)：写文件 → 启动加载）\n";
+    {
+        const std::string friendFile = "demo_save_friends.dat";
+        const std::string groupFile = "demo_save_groups.dat";
+        const std::string actFile = "demo_save_activation.dat";
+        {
+            // 进程一：造数据，容器析构时写回文件
+            UserRegistryFH regA;
+            auto a = regA.registerUser("90001", "演示甲", "2000-01-01", "北京", 2018);
+            auto b = regA.registerUser("90002", "演示乙", "2000-02-02", "上海", 2019);
+            regA.bindWeChat(a, "wx-90001");
+            regA.bindWeChat(b, "wx-90002");
+            regA.setActivationPath(actFile);
+            ActivationManagerFH actA;
+            actA.activate(*a, PlatformKindFH::QQ);
+            actA.activate(*a, PlatformKindFH::WeChat);
+            FriendRegistryFH friA;
+            friA.setPersistencePath(friendFile);
+            friA.makeFriends(*a, *b, PlatformKindFH::QQ);
+            GroupRegistryFH grpA;
+            grpA.setPersistencePath(groupFile);
+            grpA.createGroup(*a, PlatformKindFH::QQ, "保存演示群");
+            std::cout << "     进程一：开通 2 项 / 好友 1 对 / 自建群 1 个 → 析构写回文件\n";
+        }
+        {
+            // 进程二：全新容器从文件读入（模拟系统启动加载）
+            UserRegistryFH regB;
+            auto a = regB.registerUser("90001", "演示甲", "2000-01-01", "北京", 2018);
+            auto b = regB.registerUser("90002", "演示乙", "2000-02-02", "上海", 2019);
+            regB.bindWeChat(a, "wx-90001");
+            regB.bindWeChat(b, "wx-90002");
+            regB.setActivationPath(actFile);
+            FriendRegistryFH friB;
+            friB.setPersistencePath(friendFile);
+            GroupRegistryFH grpB;
+            grpB.setPersistencePath(groupFile);
+            const GroupInfoFH* saved = grpB.findGroup("1007");
+            std::cout << "     进程二（模拟重启）：开通恢复 "
+                      << a->activatedPlatforms().size() << " 项 / 好友恢复 "
+                      << (friB.isFriend(*a, *b, PlatformKindFH::QQ) ? "成功" : "失败")
+                      << " / 群恢复 "
+                      << (saved ? "成功" : "失败") << "\n";
+            if (saved)
+                std::cout << "       群 " << saved->groupId << "「" << saved->name
+                          << "」群主 " << saved->ownerId << "，成员 "
+                          << saved->memberIds.size() << " 人\n";
+        }
+        std::remove(friendFile.c_str());
+        std::remove(groupFile.c_str());
+        std::remove(actFile.c_str());
+    }
     std::cout << "======== 阶段 C 自动演示结束 ========\n";
 }
 
