@@ -209,6 +209,7 @@ classDiagram
 |---|---|
 | `design.md` | 群组管理部分的设计文档（权限矩阵、时序、模板方法说明） |
 | `cpp-implementation-division.md` | 四人分工与接口冻结点（组长/用户/群/服务） |
+| `docs/class-diagram.md` | FH 分支全量类图（Mermaid，含关键时序） |
 
 ## 9. 已知边界
 
