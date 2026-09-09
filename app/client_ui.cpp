@@ -180,7 +180,10 @@ int chooseByLabels(const std::string& prompt,
     return r < 0 ? -1 : static_cast<int>(r - 1);
 }
 
-// 模拟“正在提交”的加载过程，让每次操作都有可见的过程反馈
+// 操作过程反馈：在控制台打印一段短暂的“处理中”动画，使每次操作都有
+// 可见的提交过程（与成功/失败提示条配合）。
+// 说明：本项目为单机内存模型，操作是同步瞬时完成的，该动画是 UI 层的
+// 反馈模拟（真实项目中此处应替换为真实的 I/O 或网络往返等待）。
 void busy(const std::string& what) {
     static const char spin[] = {'|', '/', '-', '\\'};
     std::cout << "  " << what << " 处理中 ";
@@ -440,6 +443,227 @@ std::string manageMemberFailReason(const LocalSlot& slot, const UserPtr& op,
     return kick ? "移除被群规则拒绝" : "禁言操作被群规则拒绝";
 }
 
+// —— 群设置（二级菜单）：邀请开关 / 撤回时间窗，建群后仍可变更 ——
+// 变更走 EDIT_GROUP 授权（管理员及以上），与“全员禁言”是两条不同规则。
+void runGroupSettings(LocalSlot& live) {
+    GroupFH& grp = *live.group;
+    for (;;) {
+        cls();
+        std::cout << "\n";
+        uiRule("群设置：" + grp.getName());
+        const UserPtr meUser = actorFor(g.me, live.platform);
+        std::cout << "  普通成员可邀请（QQ 概念）："
+                  << (grp.getConfig().isMemberInviteEnabled() ? "开启" : "关闭")
+                  << "    全员禁言："
+                  << (grp.getConfig().isAllMuted() ? "开启" : "关闭") << "\n";
+        std::cout << "  撤回时间窗："
+                  << grp.getConfig().getRecallTimeLimit().count()
+                  << " 秒    人数上限：" << grp.getConfig().getMaxMembers() << "\n";
+        std::cout << "  说明：微信群没有“普通成员可邀请”开关——微信群仅群主可推荐加入。\n";
+        std::cout << "  ------------------------------------------------------------------\n";
+        std::cout << "  [1]切换“普通成员可邀请”开关  [2]修改撤回时间窗  [0]返回\n";
+        std::cout << "  " << g.notice << "\n";
+        g.notice.clear();
+        std::cout << "  请按键选择：";
+        const char k = waitKey();
+        if (k == '0') return;
+        if (!meUser) {
+            noticeFail("你缺少该平台账号，无法变更群设置。");
+            continue;
+        }
+        if (k == '1') {
+            if (live.platform != PlatformKindFH::QQ) {
+                noticeFail("微信群没有此开关：微信群仅群主可推荐加入（平台差异）。");
+                continue;
+            }
+            const bool next = !grp.getConfig().isMemberInviteEnabled();
+            busy("配置变更");
+            if (grp.setMemberInviteEnabled(meUser, next))
+                noticeOK(std::string("已") + (next ? "开启" : "关闭") +
+                         "“QQ 普通成员可邀请”开关。");
+            else
+                noticeFail("变更群设置需要管理员及以上身份（或群已解散）。");
+            continue;
+        }
+        if (k == '2') {
+            const long sec =
+                askNum("  新的撤回时间窗（0~3600 秒，0=不可撤回）> ", 0, 3600);
+            if (sec < 0) {
+                noticeInfo("已取消");
+                continue;
+            }
+            busy("配置变更");
+            if (grp.setRecallTimeLimit(meUser, std::chrono::seconds(sec)))
+                noticeOK("撤回时间窗已改为 " + std::to_string(sec) +
+                         " 秒（窗口外的消息不可撤回）。");
+            else
+                noticeFail("变更群设置需要管理员及以上身份（或群已解散）。");
+            continue;
+        }
+        if (k != 0) noticeFail("无效按键：" + std::string(1, k));
+    }
+}
+
+// —— 以群内其他成员的身份继续操作（验证不同角色的权限差异）——
+bool switchActorInGroup(const LocalSlot& live) {
+    GroupFH& grp = *live.group;
+    const UserPtr cur = actorFor(g.me, live.platform);
+    std::vector<std::string> labels;
+    std::vector<ProfilePtr> hits;
+    for (const auto& u : sortedMembers(grp)) {
+        if (cur && u->getId() == cur->getId()) continue;  // 跳过自己
+        ProfilePtr p = nullptr;
+        for (const auto& q : g.people)
+            if (q->platformAccountId(live.platform) == u->getId()) {
+                p = q;
+                break;
+            }
+        if (!p) continue;
+        labels.push_back(std::string(zhRole(*grp.getRole(u))) + " " +
+                         p->getNickname() + "（" + u->getId() + "）");
+        hits.push_back(p);
+    }
+    if (hits.empty()) {
+        noticeFail("群内没有其他可切换的演示账号（可先邀请成员入群）。");
+        return false;
+    }
+    const int idx = chooseByLabels("  选择要以谁的身份操作> ", labels);
+    if (idx < 0) return false;
+    g.me = hits[static_cast<std::size_t>(idx)];
+    noticeOK("已切换操作身份为 " + g.me->getNickname() +
+             "（可直接验证其在群内的权限）。");
+    return true;
+}
+
+// —— 正式群“更多操作”二级菜单（全部数字键：0 返回会话，8 返回会话列表）——
+// 返回 false 表示退出本会话（回到会话列表）
+bool runLocalMore(LocalSlot& live) {
+    GroupFH& grp = *live.group;
+    for (;;) {
+        cls();
+        std::cout << "\n";
+        uiRule("更多操作：" + grp.getName() +
+               "（" + platCn(live.platform) + " 管理模式）");
+        const UserPtr meUser = actorFor(g.me, live.platform);
+        std::cout << "  我的身份："
+                  << (meUser ? localRoleName(live, meUser) : std::string("非成员"))
+                  << "    成员数：" << grp.members().size() << "\n";
+        std::cout << "  ------------------------------------------------------------------\n";
+        std::cout << "  [1]切换管理模式  [2]转让群主  [3]解散群  [4]退出本群\n";
+        std::cout << "  [5]群设置（邀请开关/撤回窗口）  [6]以其他成员身份操作\n";
+        std::cout << "  [7]本页操作帮助  [8]返回会话列表  [0]返回会话\n";
+        std::cout << "  " << g.notice << "\n";
+        g.notice.clear();
+        std::cout << "  请按键选择：";
+        const char k = waitKey();
+
+        if (k == '0') return true;
+        if (k == '8') return false;
+        if (k == '7') {
+            cls();
+            uiRule("更多操作 · 说明（阶段 A / 平台差异）");
+            std::cout << "  切换管理模式：群成员与消息数据原样保留，仅换绑群策略\n"
+                         "                （任务书 6.(4)：动态变换管理特色，数据不受伤害）\n"
+                         "  转让群主    ：仅群主，原群主降为普通成员（角色属于群成员关系）\n"
+                         "  解散群      ：仅群主，解散后成员清空、所有操作被拒绝\n"
+                         "  退出本群    ：普通成员/管理员主动退群；群主须先转让或解散\n"
+                         "  群设置      ：邀请开关（QQ 概念）与撤回时间窗，需管理员及以上\n"
+                         "  切换身份    ：以群内其他成员身份操作，便于验证权限差异\n"
+                         "  按任意键返回：";
+            waitKey();
+            continue;
+        }
+        if (!meUser) {
+            if (k != 0) noticeFail("你缺少该平台账号，无法执行该操作。");
+            continue;
+        }
+        switch (k) {
+        case '1': {  // 切换管理模式（成员数据不受伤害）
+            const auto next = live.platform == PlatformKindFH::QQ
+                                  ? PlatformKindFH::WeChat
+                                  : PlatformKindFH::QQ;
+            std::shared_ptr<GroupPolicyFH> nextPolicy =
+                next == PlatformKindFH::QQ
+                    ? std::static_pointer_cast<GroupPolicyFH>(
+                          std::make_shared<QQPolicyFH>())
+                    : std::static_pointer_cast<GroupPolicyFH>(
+                          std::make_shared<WeChatPolicyFH>());
+            busy("模式切换");
+            const std::size_t before = grp.members().size();
+            if (grp.switchPolicy(nextPolicy)) {
+                live.platform = next;
+                noticeOK("已切换为「" + platCn(next) +
+                         "」管理模式，成员数不变（" + std::to_string(before) +
+                         " 人），数据未受影响。");
+            } else {
+                noticeFail("切换失败（群已解散或策略无效）。");
+            }
+            continue;
+        }
+        case '2': {  // 转让群主
+            std::vector<std::string> labels;
+            std::vector<UserPtr> list;
+            for (const auto& u : sortedMembers(grp)) {
+                if (u->getId() == meUser->getId()) continue;
+                labels.push_back(std::string(zhRole(*grp.getRole(u))) + " " +
+                                 u->getNickname() + "(" + u->getId() + ")");
+                list.push_back(u);
+            }
+            const int idx = chooseByLabels("  选择群主接班人> ", labels);
+            if (idx < 0) continue;
+            const UserPtr& target = list[static_cast<std::size_t>(idx)];
+            busy("群主转让");
+            if (grp.transferOwner(meUser, target))
+                noticeOK("群主已转让给 " + target->getNickname() +
+                         "，你降为普通成员。");
+            else
+                noticeFail("仅群主可转让，且不能转让给自己（或群已解散）。");
+            continue;
+        }
+        case '3': {  // 解散群（二次确认）
+            if (localRoleName(live, meUser) != std::string("群主")) {
+                noticeFail("仅群主可解散群（或群已解散）。");
+                continue;
+            }
+            std::cout << "  再次确认解散群「" << grp.getName()
+                      << "」？输入 y 确认，其他任意键取消：";
+            if (waitKey() != 'y') {
+                noticeInfo("已取消解散");
+                continue;
+            }
+            busy("解散处理");
+            if (grp.disband(meUser))
+                noticeOK("群已解散，成员全部移出，所有操作被拒绝。");
+            else
+                noticeFail("解散失败（可能已解散）。");
+            continue;
+        }
+        case '4': {  // 退出本群（G1：任务书 3.(2) 退出群）
+            if (localRoleName(live, meUser) == std::string("群主")) {
+                noticeFail("群主不能直接退群：请先转让群主（[2]）或解散群（[3]）。");
+                continue;
+            }
+            busy("退群处理");
+            if (grp.leaveGroup(meUser)) {
+                noticeOK("已退出本群「" + grp.getName() + "」。");
+                return false;  // 退群后回到会话列表
+            }
+            noticeFail("退群失败（你不在群内或群已解散）。");
+            continue;
+        }
+        case '5':
+            runGroupSettings(live);
+            continue;
+        case '6':
+            if (switchActorInGroup(live)) return true;  // 身份生效，回会话主界面
+            continue;
+        default:
+            if (k != 0) noticeFail("无效按键：" + std::string(1, k));
+            continue;
+        }
+    }
+}
+
 void runLocalChat(const LocalSlot& slot) {
     // slot 在 runWorkspace 中传入副本，这里持有可修改引用数组内容——
     // 通过原数组定位，以保证 switchPolicy 等修改可持久化。
@@ -450,9 +674,10 @@ void runLocalChat(const LocalSlot& slot) {
                                     });
     App& sess = g;  // 记录全局会话引用（随后局部 g 指本群聚合根）
     GroupFH& g = *grp;
-    const UserPtr meUser = actorFor(sess.me, live.platform);
 
     for (;;) {
+        // 每轮重算“我”：切换操作身份或切换管理模式后即时生效
+        const UserPtr meUser = actorFor(sess.me, live.platform);
         cls();
         std::cout << "\n";
         uiRule("正式群会话：" + g.getName() +
@@ -467,9 +692,9 @@ void runLocalChat(const LocalSlot& slot) {
         std::cout << "\n";
         if (g.isDisbanded()) {
             std::cout << "  >> 本群已解散，成员已清空，仅可返回。\n";
-            std::cout << "  [e]返回会话列表  [r]刷新\n";
-            char k = waitKey();
-            if (k == 'e') return;
+            std::cout << "  [0]返回会话列表\n";
+            const char k = waitKey();
+            if (k == '0') return;
             continue;
         }
         std::cout << "  我的身份：" << localRoleName(live, meUser);
@@ -493,15 +718,28 @@ void runLocalChat(const LocalSlot& slot) {
                       << (m->isRecalled() ? " ［已撤回］" : "") << "\n";
         }
 
-        // —— 操作按钮区 ——
+        // —— 操作按钮区：数字键为功能键，0 进入“更多操作” ——
         std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]发送消息  [2]撤回消息  [3]邀请成员  [4]踢出成员  [5]禁言/解禁\n";
-        std::cout << "  [6]全员禁言  [7]任命管理员 [8]群公告    [9]改群名   [0]切换管理模式\n";
-        std::cout << "  [Q]转让群主  [W]解散群    [E]返回会话列表  [R]刷新  [H]帮助\n";
+        if (!meUser) {
+            std::cout << "  [提示] 当前管理模式为「" << platCn(live.platform)
+                      << "」，但你没有该平台账号，仅可浏览本群。\n";
+            std::cout << "  [0]更多操作（含返回会话列表）\n";
+        } else {
+            std::cout << "  [1]发送消息  [2]撤回消息  [3]邀请成员  [4]踢出成员  [5]禁言/解禁\n";
+            std::cout << "  [6]全员禁言  [7]任命管理员 [8]群公告    [9]改群名   [0]更多操作\n";
+        }
         std::cout << "  " << sess.notice << "\n";
         sess.notice.clear();
         std::cout << "  请按键选择：";
         const char k = waitKey();
+        if (!meUser) {  // 无账号时只保留“更多操作”（其中含返回会话列表）
+            if (k == '0') {
+                if (!runLocalMore(live)) return;
+            } else if (k != 0) {
+                noticeFail("无效按键：" + std::string(1, k));
+            }
+            continue;
+        }
 
         switch (k) {
         case '1': {  // 发送消息
@@ -679,88 +917,10 @@ void runLocalChat(const LocalSlot& slot) {
                 noticeFail("修改群名需要管理员及以上身份（或群已解散）。");
             continue;
         }
-        case '0': {  // 切换管理模式：QQ <-> 微信策略（成员数据不受伤害）
-            const auto next =
-                live.platform == PlatformKindFH::QQ ? PlatformKindFH::WeChat
-                                                    : PlatformKindFH::QQ;
-            std::shared_ptr<GroupPolicyFH> nextPolicy;
-            if (next == PlatformKindFH::QQ)
-                nextPolicy = std::make_shared<QQPolicyFH>();
-            else
-                nextPolicy = std::make_shared<WeChatPolicyFH>();
-            busy("模式切换");
-            const std::size_t before = g.members().size();
-            if (g.switchPolicy(nextPolicy)) {
-                live.platform = next;
-                noticeOK("已切换为「" + platCn(next) +
-                         "」管理模式，成员数不变（" +
-                         std::to_string(before) + " 人），数据未受影响。");
-            } else {
-                noticeFail("切换失败（群已解散或策略无效）。");
-            }
+        case '0': {  // 更多操作：切换管理模式 / 转让 / 解散 / 退群 / 群设置 / 切换身份
+            if (!runLocalMore(live)) return;
             continue;
         }
-        case 'q': {  // 转让群主
-            const auto members = sortedMembers(g);
-            std::vector<std::string> labels;
-            std::vector<UserPtr> list;
-            for (const auto& u : members) {
-                if (u->getId() == meUser->getId()) continue;
-                labels.push_back(std::string(zhRole(*g.getRole(u))) + " " +
-                                 u->getNickname() + "(" + u->getId() + ")");
-                list.push_back(u);
-            }
-            const int idx = chooseByLabels("  选择群主接班人> ", labels);
-            if (idx < 0) continue;
-            const UserPtr& target = list[static_cast<std::size_t>(idx)];
-            busy("群主转让");
-            if (g.transferOwner(meUser, target))
-                noticeOK("群主已转让给 " + target->getNickname() +
-                         "，你降为普通成员。");
-            else
-                noticeFail("仅群主可转让，且不能转让给自己（或群已解散）。");
-            continue;
-        }
-        case 'w': {  // 解散群（需二次确认）
-            if (localRoleName(live, meUser) != std::string("群主")) {
-                noticeFail("仅群主可解散群（或群已解散）。");
-                continue;
-            }
-            std::cout << "  再次确认解散群「" << g.getName()
-                      << "」？输入大写 Y 确认，其他任意键取消：";
-            if (waitKey() != 'y') {
-                noticeInfo("已取消解散");
-                continue;
-            }
-            busy("解散处理");
-            if (g.disband(meUser))
-                noticeOK("群已解散，成员全部移出，所有操作被拒绝。");
-            else
-                noticeFail("解散失败（可能已解散）。");
-            continue;
-        }
-        case 'h':
-            cls();
-            uiRule("正式群操作帮助（阶段 A / 策略差异）");
-            std::cout << "  公共规则（QQ 与微信一致）：\n"
-                         "    发送消息：成员均可，但被单禁言或全员禁言时普通成员不可发言\n"
-                         "    撤回消息：普通成员仅能撤回自己、且需在撤回窗口内；\n"
-                         "              管理员/群主可撤回任意消息\n"
-                         "    踢人/禁言：仅管理员+；不能操作同级或更高等级成员\n"
-                         "    任命/撤销管理员、转让群主、解散群：仅群主\n"
-                         "  平台差异：\n"
-                         "    QQ   ：群配置开启“普通成员可邀请”时成员可邀请；\n"
-                         "           管理员即可设置全员禁言\n"
-                         "    微信 ：普通成员不能邀请（仅管理员+）；\n"
-                         "           全员禁言仅群主可设置\n"
-                         "  管理模式可随时切换（[0]），成员数据不受伤害。\n"
-                         "  按任意键返回：";
-            waitKey();
-            continue;
-        case 'e':
-            return;
-        case 'r':
-            continue;
         default:
             if (k != 0) noticeFail("无效按键：" + std::string(1, k));
             continue;
@@ -858,7 +1018,7 @@ void runOfficialChat(const std::string& groupId) {
         }
 
         std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]发送消息  [2]加入本群  [3]退出本群  [4]刷新  [0]返回\n";
+        std::cout << "  [1]发送消息  [2]加入本群  [3]退出本群  [0]返回\n";
         std::cout << "  " << g.notice << "\n";
         g.notice.clear();
         std::cout << "  请按键选择：";
@@ -939,8 +1099,6 @@ void runOfficialChat(const std::string& groupId) {
                 noticeFail("退群失败：可能你并不在该群。");
             continue;
         }
-        case '4':
-            continue;
         case '0':
             return;
         default:
@@ -981,7 +1139,7 @@ void runDiscChat(std::size_t index) {
             std::cout << "    · " << nickOf(PlatformKindFH::QQ, id) << "\n";
 
         std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]邀请成员  [2]退出讨论组  [3]解散（仅发起人）  [4]刷新  [0]返回\n";
+        std::cout << "  [1]邀请成员  [2]退出讨论组  [3]解散（仅发起人）  [0]返回\n";
         std::cout << "  " << g.notice << "\n";
         g.notice.clear();
         std::cout << "  请按键选择：";
@@ -1020,8 +1178,6 @@ void runDiscChat(std::size_t index) {
             busy("解散处理");
             disc->disband(*g.me);
             noticeOK("讨论组已解散，成员清空，后续邀请/退出被拒绝。");
-            continue;
-        case '4':
             continue;
         case '0':
             return;
@@ -1106,6 +1262,9 @@ void runConversationList() {
         waitKey();
         return;
     }
+    std::cout << "  体系说明：正式群 = 聚合根 GroupFH（群号 9000+，具备完整群管理与\n"
+                 "            策略切换）；官方/自建群 = 群注册表（群号 1001~1006/1007+，\n"
+                 "            承载消息类型差异）；讨论组 = QQ 临时讨论组（容量小、全员可邀请）。\n";
     std::vector<std::string> labels;
     for (const auto& it : items) labels.push_back(it.label);
     const int sel = chooseByLabels("  选择要进入的会话> ", labels);
@@ -1118,10 +1277,49 @@ void runConversationList() {
 // 官方群大厅：浏览官方群 / 自建官方群 / 加入并进入
 // ============================================================
 
+// 在大厅创建“官方自建群”（群注册表体系，群号自动从 1007 起分配）
+void createOfficialGroupInHall() {
+    std::cout << "  请选择新群所在平台：\n"
+                 "   [1]QQ  [2]微信  [3]微博  [0]取消\n";
+    const char pk = waitKey();
+    PlatformKindFH pl;
+    if (pk == '1')
+        pl = PlatformKindFH::QQ;
+    else if (pk == '2')
+        pl = PlatformKindFH::WeChat;
+    else if (pk == '3')
+        pl = PlatformKindFH::Weibo;
+    else {
+        noticeInfo("已取消建群");
+        return;
+    }
+    if (!g.me->hasPlatformAccount(pl)) {
+        noticeFail("你没有该平台的账号，不能在此平台建群"
+                   "（微信群需先绑定微信号）。");
+        return;
+    }
+    auto name = askText("  新群名称（直接回车取消）> ");
+    if (!name) {
+        noticeInfo("已取消建群");
+        return;
+    }
+    busy("建群处理");
+    if (g.official.createGroup(*g.me, pl, *name)) {
+        const auto list = g.official.groupsOfPlatform(pl);
+        const std::string nid = list.back()->groupId;
+        noticeOK("创建成功：群号 " + nid + "，你已自动成为群主。");
+        runOfficialChat(nid);
+    } else {
+        noticeFail("建群失败：群名不能为空或账号缺失。");
+    }
+}
+
 void runHall() {
     for (;;) {
         cls();
         uiRule("群大厅（官方预置 QQ 1001~1002 / 微信 1003~1004 / 微博 1005~1006，自建群从 1007 起）");
+        std::cout << "  说明：本大厅属“群注册表”体系（官方预置 + 自建官方群）；\n"
+                     "        【创建】里的本地正式群属“聚合根”体系（群号 9000+，完整群管理）。\n";
         const auto& groups = g.official;
         std::vector<std::string> labels;
         std::vector<const GroupInfoFH*> hits;
@@ -1145,49 +1343,19 @@ void runHall() {
         }
         for (std::size_t i = 0; i < labels.size(); ++i)
             std::cout << "   [" << (i + 1) << "] " << labels[i] << "\n";
+        const std::size_t createKey = labels.size() + 1;  // 动态编号，避免与群序号冲突
         std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [C]创建群（官方群注册表，群号自动分配）  [0]返回\n";
+        std::cout << "  [" << createKey
+                  << "]创建群（官方群注册表，群号自动分配）  [0]返回\n";
         std::cout << "  " << g.notice << "\n";
         g.notice.clear();
-        std::cout << "  请选择群序号进入聊天 / 按 C 建群：";
 
-        if (labels.size() <= 9) {
+        if (labels.size() <= 8) {
+            std::cout << "  请选择群序号进入聊天，或按 " << createKey << " 建群：";
             const char k = waitKey();
             if (k == '0') return;
-            if (k == 'c') {
-                std::cout << "  请选择新群所在平台：\n"
-                             "   [1]QQ  [2]微信  [3]微博  [0]取消\n";
-                const char pk = waitKey();
-                PlatformKindFH pl;
-                if (pk == '1')
-                    pl = PlatformKindFH::QQ;
-                else if (pk == '2')
-                    pl = PlatformKindFH::WeChat;
-                else if (pk == '3')
-                    pl = PlatformKindFH::Weibo;
-                else {
-                    noticeInfo("已取消建群");
-                    continue;
-                }
-                if (!g.me->hasPlatformAccount(pl)) {
-                    noticeFail("你没有该平台的账号，不能在此平台建群"
-                               "（微信群需先绑定微信号）。");
-                    continue;
-                }
-                auto name = askText("  新群名称（直接回车取消）> ");
-                if (!name) {
-                    noticeInfo("已取消建群");
-                    continue;
-                }
-                busy("建群处理");
-                if (g.official.createGroup(*g.me, pl, *name)) {
-                    const auto list = g.official.groupsOfPlatform(pl);
-                    const std::string nid = list.back()->groupId;
-                    noticeOK("创建成功：群号 " + nid + "，你已自动成为群主。");
-                    runOfficialChat(nid);
-                } else {
-                    noticeFail("建群失败：群名不能为空或账号缺失。");
-                }
+            if (static_cast<std::size_t>(k - '0') == createKey) {
+                createOfficialGroupInHall();
                 continue;
             }
             if (k >= '1' && k <= static_cast<char>('0' + labels.size())) {
@@ -1198,9 +1366,14 @@ void runHall() {
             continue;
         }
         const long sel = askNum("  输入群序号（1~" + std::to_string(labels.size()) +
-                                    "，直接回车返回）> ",
-                                1, static_cast<long>(labels.size()));
+                                    "，或 " + std::to_string(createKey) +
+                                    " 建群；直接回车返回）> ",
+                                1, static_cast<long>(createKey));
         if (sel < 0) return;
+        if (static_cast<std::size_t>(sel) == createKey) {
+            createOfficialGroupInHall();
+            continue;
+        }
         runOfficialChat(hits[static_cast<std::size_t>(sel - 1)]->groupId);
     }
 }
@@ -1234,7 +1407,7 @@ void runServiceCenter() {
                      "  ------------------------------------------------------------------\n";
         std::cout << "  [1]开通服务  [2]取消开通  [3]绑定微信号\n"
                      "  [4]登录服务  [5]退出单服务 [6]退出全部\n"
-                     "  [7]刷新 [0]返回\n";
+                     "  [0]返回\n";
         std::cout << "  " << g.notice << "\n";
         g.notice.clear();
         std::cout << "  请按键选择：";
@@ -1318,8 +1491,6 @@ void runServiceCenter() {
             g.login.logoutAll(*g.me);
             noticeOK("已退出全部服务。");
             continue;
-        case '7':
-            continue;
         case '0':
             return;
         default:
@@ -1371,7 +1542,7 @@ void runContacts() {
         std::cout << "  [1]添加QQ好友  [2]添加微信好友  [3]微博关注\n"
                      "  [4]删除QQ好友  [5]删除微信好友  [6]取消微博关注\n"
                      "  [7]修改好友备注  [8]查询共同好友  [9]跨服务推荐添加\n"
-                     "  [R]刷新 [0]返回\n";
+                     "  [0]返回\n";
         std::cout << "  " << g.notice << "\n";
         g.notice.clear();
         std::cout << "  请按键选择：";
@@ -1545,8 +1716,6 @@ void runContacts() {
                 noticeFail("添加失败。");
             continue;
         }
-        case 'r':
-            continue;
         case '0':
             return;
         default:
@@ -1678,13 +1847,33 @@ bool runAccountGate() {
             std::cout << "）\n";
             hits.push_back(p);
         }
+        // 注册 / 说明采用动态编号（账号数 +1 / +2），避免与账号序号冲突
+        const std::size_t n = g.people.size();
+        const std::size_t regKey = n + 1;
+        const std::size_t helpKey = n + 2;
         std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [R]注册新账号  [H]操作说明  [0]退出\n";
-        std::cout << "  请选择：";
-
-        const char k = waitKey();
-        if (k == '0') return false;
-        if (k == 'r') {
+        std::size_t num = 0;
+        if (n <= 7) {
+            std::cout << "  [" << regKey << "]注册新账号  [" << helpKey
+                      << "]操作说明  [0]退出\n";
+            std::cout << "  请选择：";
+            const char k = waitKey();
+            if (k == '0') return false;
+            num = (k >= '0' && k <= '9') ? static_cast<std::size_t>(k - '0') : 0;
+            if (num == 0) {
+                if (k != 0) noticeFail("无效按键：" + std::string(1, k));
+                continue;
+            }
+        } else {
+            const long r = askNum("  输入序号（1~" + std::to_string(n) +
+                                      " 选账号，" + std::to_string(regKey) +
+                                      " 注册，" + std::to_string(helpKey) +
+                                      " 说明，0 退出）> ",
+                                  0, static_cast<long>(helpKey));
+            if (r <= 0) return false;
+            num = static_cast<std::size_t>(r);
+        }
+        if (num == regKey) {
             auto qq = askText("  新 QQ 号（唯一，直接回车取消）> ");
             if (!qq) { noticeInfo("已取消注册"); continue; }
             auto nick = askText("  昵称（直接回车取消）> ");
@@ -1710,7 +1899,7 @@ bool runAccountGate() {
                 continue;
             }
         }
-        if (k == 'h') {
+        if (num == helpKey) {
             cls();
             uiRule("操作说明");
             std::cout << R"guide(本工作台按真实 IM 客户端的逻辑组织操作路径：
@@ -1726,20 +1915,20 @@ bool runAccountGate() {
      （阶段 A）。也可创建 QQ 临时讨论组（阶段 C）。
   ④ 【我的会话】进入任一已加入会话开始操作；【通讯录】管理
      QQ/微信双向好友与微博单向关注（阶段 C）。
-  全部按钮均为单键热键，界面底部提示条会显示每一步成功/失败原因。
+  全部操作项均为数字键（0 = 返回上级 / 更多操作），界面底部提示条会
+  显示每一步成功或失败的原因；每次操作后界面自动重绘。
 )guide";
             std::cout << "  按任意键返回：";
             waitKey();
             continue;
         }
-        const std::size_t idx = static_cast<std::size_t>(k - '1');
-        if (k >= '1' && idx < hits.size()) {
-            g.me = hits[idx];
+        if (num >= 1 && num <= hits.size()) {
+            g.me = hits[num - 1];
             g.notice = "[提示] 当前操作账号：" + g.me->getNickname() +
                        "。建议先到【账号中心】确认服务状态，再到【官方群大厅】/【创建】开始。";
             return true;
         }
-        if (k != 0) noticeFail("无效按键：" + std::string(1, k));
+        noticeFail("无效选择。");
     }
 }
 
@@ -1756,6 +1945,9 @@ void runHelp() {
   3) 分别用不同身份测试：普通成员邀请（QQ开关 vs 微信禁止）、
      管理员设全员禁言（QQ 可、微信仅群主）、禁言后普通成员发言失败、
      撤回时间窗、转让群主后原群主仅剩成员权限、切模式成员不丢、解散后一切被拒。
+  4) 会话内按 [0] 进入“更多操作”：切换管理模式 / 转让群主 / 解散群 /
+     退出本群（群主不能直接退群，须先转让或解散）/ 群设置（改邀请开关、
+     把撤回窗口调小以复现“超时不可撤回”）/ 以其他成员身份操作。
 【B · 多产品体系（账号中心）】
   1) 用新注册账号体验：未开通服务登录失败→开通→登录联动（全部上线）；
   2) 在线时取消开通被拒→退出后取消成功；
@@ -1795,6 +1987,7 @@ bool runWorkspace() {
                 if (!d->isDisbanded() && d->contains(g.me->getQQId())) ++nDisc;
             std::cout << "     正式群 " << nLocal << " · 官方/自建群 " << nOfficial
                       << " · QQ 讨论组 " << nDisc << "\n";
+            std::cout << "     （正式群=聚合根体系，官方群=群注册表体系，两者入口不同）\n";
         }
         std::cout << "  ------------------------------------------------------------------\n";
         std::cout << "  [1]我的会话（进入聊天）  [2]官方群大厅  [3]通讯录·好友\n";

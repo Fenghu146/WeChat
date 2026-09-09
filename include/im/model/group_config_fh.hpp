@@ -38,6 +38,13 @@ public:
     // 全员禁言开关，由 GroupFH::setAllMute 在授权通过后调用
     void setAllMuted(bool allMuted) noexcept { allMuted_ = allMuted; }
 
+    // 撤回时间窗可在群运行期调整（由 GroupFH::setRecallTimeLimit 授权后调用）；
+    // 负数属非法配置，validate() 会抛出 std::invalid_argument
+    void setRecallTimeLimit(std::chrono::seconds limit) {
+        recallTimeLimit_ = limit;
+        validate();
+    }
+
 private:
     std::size_t maxMembers_{500};                 // 群人数上限
     bool memberInviteEnabled_{false};             // 普通成员邀请开关

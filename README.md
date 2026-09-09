@@ -19,6 +19,7 @@
 | **B** | 微X 多产品体系 | 自然人档案（QQ/微博同号、微信独立）、平台账号、自选开通服务、登录联动 |
 | **C** | 社交关系 | 好友 / 微博关注（按平台隔离）、群注册表（预置群号 1001~1006）、QQ 临时讨论组 |
 | **D** | 消息平台差异 | 消息类型（文本/图片/文件/语音/表情）、平台消息能力规则、群消息记录与引用回复 |
+| **E** | 测试与界面工程 | 自包含断言框架 + 9 个 ctest 回归套件（97 用例）、手动测试工作台（热键 / 表单 / 分屏 / 失败原因提示） |
 
 演示程序默认进入**手动测试工作台**：按真实 IM 客户端操作逻辑组织界面
 （选择自然人与服务 → 官方群大厅/建群 → 会话内发消息与群管理），支持单键
@@ -32,8 +33,10 @@ include/im/
 ├── model/      领域实体：User、GroupRole、GroupMembership、GroupConfig、Message、Group（聚合根）
 ├── context/    授权上下文：Action（枚举）、GroupContext
 ├── policy/     策略：GroupPolicy（接口）、AbstractGroupPolicy（六步模板方法）、QQPolicy、WeChatPolicy
-├── platform/   微X 产品：PlatformKind（枚举）、UserProfile（自然人档案）、AccountInfo、UserRegistry、ActivationManager、LoginManager
-├── social/     社交：FriendRegistry（好友/关注）、GroupRegistry（群目录/群聊）、DiscussionGroup（QQ 临时讨论组）
+├── platform/   微X 产品：PlatformKind（枚举）、UserProfile（自然人档案）、AccountInfo、UserRegistry、
+│               ActivationManager、LoginManager、PersistUtil（存档行式转义工具）
+├── social/     社交：FriendRegistry（好友/关注）、FriendShip、GroupRegistry（群目录/群聊）、
+│               GroupInfo、GroupChatRecord、DiscussionGroup（QQ 临时讨论组）
 └── message/    消息扩展：MessageKind（枚举）、PlatformMessagePolicy（平台消息能力规则）
 src/
 └── policy/     策略实现源文件（abstract_group_policy / qq_policy / wechat_policy）
@@ -41,6 +44,9 @@ app/
 ├── main.cpp        程序入口（--demo 自动演示 / 默认进手动工作台）
 ├── client_ui.hpp   手动工作台入口声明
 └── client_ui.cpp   手动测试工作台实现（热键操作 + 分屏展示 + 错误反馈）
+tests/              9 个回归套件（共 97 个用例）+ 自包含断言框架 fh_mini_test.hpp
+
+运行期生成（已加入 .gitignore）：save_activation_fh.dat / save_friends_fh.dat / save_groups_fh.dat
 ```
 
 ## 3. 构建与运行
@@ -53,9 +59,13 @@ cmake --build build --config Debug
 # Linux/macOS: ./build/demo_fh [--demo]
 ```
 
-进入工作台后先选择演示账号（或按 `R` 注册），按 `H` 查看操作说明与建议
-测试路径。所有按钮均为单键热键（按数字/字母即触发，无需回车）；需要输入
-文本时按提示输入、直接回车可取消；每一步都会在提示条显示成功或失败原因。
+进入工作台后先选择演示账号，按 `H` 查看操作说明与建议测试路径。
+**所有操作项均为数字键**（`0` = 返回上级 / 进入「更多操作」，触发无需回车；
+账号选择、群大厅等列表型界面的功能键按列表长度动态编号）；需要输入
+文本时按提示输入、直接回车可取消；每次操作后界面自动重绘，提示条显示
+成功或失败原因。
+正式群会话按 `0` 进入「更多操作」：切换管理模式 / 转让群主 / 解散群 /
+退出本群 / 群设置（邀请开关、撤回时间窗）/ 以其他成员身份操作。
 
 ### 自动化测试（阶段 E · 迁移回归保障）
 
@@ -63,10 +73,10 @@ cmake --build build --config Debug
 
 ```bash
 cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure     # 预期：8/8 全部通过
+ctest --test-dir build -C Debug --output-on-failure     # 预期：9/9 全部通过
 ```
 
-八个回归套件与阶段对应：
+九个回归套件（共 **98 个用例，全部通过**）与阶段对应：
 
 | 套件 | 覆盖 | 对应阶段 |
 |---|---|---|
@@ -78,6 +88,7 @@ ctest --test-dir build -C Debug --output-on-failure     # 预期：8/8 全部通
 | `regression_tests` | 真实性逻辑验证：构造校验、权限迁移、邀请矩阵、平台隔离、解散后状态、全员禁言、时间窗边界 | A/B/C/D |
 | `e2e_integration_test` | 端到端真实场景：群生命周期、官方群全流程、讨论组、登录联动、好友隔离、消息淘汰 | A/B/C/D |
 | `requirement_alignment_test` | **对照课程任务书逐条验证**：号码体系与群/好友列表、好友备注修改、共同好友、跨服务推荐添加、预置群号、入群/挨踢/群成员查询、QQ 申请制与微信推荐制、微信群仅群主特权、讨论组仅 QQ、三类信息断电保存、登录联动 | A/B/C/D |
+| `requirement_alignment_comprehensive_test` | **任务书全量补强**：用户基本信息与好友/群列表、好友增删查改闭环、全平台共同好友、跨服务推荐全部前置条件、预置群号 1001~1006、加/退/挨踢/查成员、入群规则与讨论组、切换群管理模式后成员保留、开通管理、登录联动、断电保存完整往返、退出群（含群主不可直接退群限制）、群配置运行期变更（需 ADMIN+） | A/B/C/D |
 
 ## 4. 各阶段功能与规则
 
@@ -86,7 +97,7 @@ ctest --test-dir build -C Debug --output-on-failure     # 预期：8/8 全部通
 - `Group` 聚合根对外只暴露业务方法（`sendMessage`、`recallMessage`、
   `inviteMember`、`kickMember`、`muteMember`、`editGroup`、
   `publishAnnouncement`、`setAllMute`、`setAdmin`、`transferOwner`、
-  `disband`），内部先授权后变更状态。
+  `leaveGroup`、`disband`），内部先授权后变更状态。
 - 角色属于 `GroupMembership`，不属于 `User`；成员表以用户 ID 为键，
   天然防重复，群主在构造时注入（任意时刻至多一个）。
 - 群解散后所有操作返回 `false`；管理员不能操作同级或更高角色。
@@ -274,10 +285,15 @@ classDiagram
 | `design.md` | 群组管理部分的设计文档（权限矩阵、时序、模板方法说明） |
 | `cpp-implementation-division.md` | 四人分工与接口冻结点（组长/用户/群/服务） |
 | `docs/class-diagram.md` | FH 分支全量类图（Mermaid，含关键时序） |
+| `TEST_REPORT.md` | 测试报告：9 套件 97 用例逐项结果、需求覆盖度与代码质量检验 |
+| `DESIGN_VERIFICATION_REPORT.md` | 设计步骤回归检查报告（对照任务书“三、设计步骤”四步逐条核对） |
 
 ## 9. 已知边界
 
 - 单线程模型；无网络 / 数据库 / 真实平台接口；
 - 撤回时间窗、消息类型能力等规则均为课程简化口径；
 - 手动工作台与 `--demo` 自动演示共用一个进程内“数据世界”，多次操作数据持续累积，
-  便于连贯验证（重启即恢复初始状态）。
+  便于连贯验证；工作台**启动即从存档文件加载、退出时写回**，因此重启后数据保留
+  （删除 `save_activation_fh.dat` / `save_friends_fh.dat` / `save_groups_fh.dat`
+  即恢复初始状态）；
+- 任务书 6.(5) 的 QQ 点对点 TCP 通信为选做项，当前未实现。
