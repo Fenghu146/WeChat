@@ -551,7 +551,7 @@ void runAutoMessageScenario() {
                                             "1005", MessageKindFH::TEXT,
                                             "今晚一起讨论任务书"))
               << "\n";
-    const std::string weiboTooLong(1001, '长');
+    std::string weiboTooLong; weiboTooLong.reserve(3003); for(int i=0;i<1001;++i) weiboTooLong += "\xe9\x95\xbf"; // 重复1001次"长"
     std::cout << "     小明在微博群 1005 发超长文本（>1000 字）："
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo,
                                             "1005", MessageKindFH::TEXT,
