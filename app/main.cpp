@@ -128,9 +128,11 @@ void runAutoScenario() {
     std::cout << "    QQ 普通成员邀请路人甲（开关开启）："
               << ok(qqGroup.inviteMember(member, outsider)) << "\n";
     std::cout << "    微信普通成员邀请路人甲：" << ok(wxGroup.inviteMember(member, outsider))
-              << "（应失败，微信仅 ADMIN+ 可邀请）\n";
+              << "（应失败，微信群仅群主可推荐加入）\n";
     std::cout << "    微信管理员邀请路人甲：" << ok(wxGroup.inviteMember(admin, outsider))
-              << "\n";
+              << "（应失败，同上；微信管理员不产生特权）\n";
+    std::cout << "    微信群主邀请路人甲：" << ok(wxGroup.inviteMember(owner, outsider))
+              << "（仅群主可邀请）\n";
     std::cout << "    路人甲再次加入 QQ 群（成员唯一）："
               << ok(qqGroup.inviteMember(owner, outsider)) << "（应失败）\n";
 
@@ -175,6 +177,22 @@ void runAutoScenario() {
               << "（应失败，只能撤回本人消息）\n";
     std::cout << "    群主撤回自己的消息："
               << ok(qqGroup.recallMessage(owner, msgByOwner->getId())) << "\n";
+
+    // 时间窗边界：构造“发送时刻早于窗口”的消息复现超时，无需真实等待
+    const long long limitSec =
+        static_cast<long long>(qqGroup.getConfig().getRecallTimeLimit().count());
+    auto staleMsg = std::make_shared<MessageFH>(
+        "m-stale", owner, "很久以前的消息",
+        std::chrono::system_clock::now() - std::chrono::seconds(limitSec + 1));
+    qqGroup.sendMessage(owner, staleMsg);
+    std::cout << "    群主撤回 " << (limitSec + 1) << " 秒前发送的消息："
+              << ok(qqGroup.recallMessage(owner, staleMsg->getId()))
+              << "（应失败：超出 " << limitSec << " 秒撤回窗口）\n";
+    auto freshMsg = makeMessage(owner, "刚刚发送的消息");
+    qqGroup.sendMessage(owner, freshMsg);
+    std::cout << "    群主撤回刚发送的消息："
+              << ok(qqGroup.recallMessage(owner, freshMsg->getId()))
+              << "（应成功：在 " << limitSec << " 秒窗口内）\n";
 
     std::cout << "\n[7] 任命管理员与转让群主：\n";
     std::cout << "    群主任命普通成员为管理员："

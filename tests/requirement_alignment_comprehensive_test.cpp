@@ -647,6 +647,66 @@ FH_TEST(Comprehensive_WeiboFollowIsolation) {
     FH_CHECK(fr.isFriend(*a, *b, PlatformKindFH::QQ));
 }
 
+// ================================================================
+// 3.(2) 退出群（群主不可直接退群）+ 群配置运行期变更（需 ADMIN+）
+// ================================================================
+
+FH_TEST(Comprehensive_LeaveGroupAndGroupConfigChange) {
+    auto owner    = mkUser("lv01", "群主");
+    auto admin    = mkUser("lv02", "管理员");
+    auto member   = mkUser("lv03", "普通成员");
+    auto outsider = mkUser("lv04", "路人");
+
+    GroupConfigFH cfg(10, /*memberInviteEnabled=*/true, false, seconds(120));
+    auto g = make_shared<GroupFH>("lg", 1001, "退群测试群", cfg,
+                                  make_shared<QQPolicyFH>(), owner);
+    FH_CHECK(g->inviteMember(owner, admin));
+    FH_CHECK(g->inviteMember(owner, member));
+    FH_CHECK(g->setAdmin(owner, admin, true));
+
+    // 普通成员可主动退群（任务书 3.(2) 退出群）
+    FH_CHECK(g->leaveGroup(member));
+    FH_CHECK(!g->contains(member));
+    // 退群后再退（已非成员）失败；群外用户退群失败
+    FH_CHECK(!g->leaveGroup(member));
+    FH_CHECK(!g->leaveGroup(outsider));
+    // 群主不能直接退群：须先转让群主或解散群，避免群处于“无主”状态
+    FH_CHECK(!g->leaveGroup(owner));
+    FH_CHECK(g->getRole(owner) == GroupRoleFH::OWNER);
+    // 管理员可以退群
+    FH_CHECK(g->leaveGroup(admin));
+    FH_CHECK(!g->contains(admin));
+    // 群主转让后降为普通成员，此时即可退群
+    FH_CHECK(g->inviteMember(owner, member));
+    FH_CHECK(g->transferOwner(owner, member));
+    FH_CHECK(g->leaveGroup(owner));
+    FH_CHECK(!g->contains(owner));
+    // 群解散后不能退群
+    FH_CHECK(g->disband(member));
+    FH_CHECK(!g->leaveGroup(member));
+
+    // 群配置运行期变更：走 EDIT_GROUP 授权（ADMIN+）
+    GroupConfigFH cfg2(10, /*memberInviteEnabled=*/false, false, seconds(120));
+    auto g2 = make_shared<GroupFH>("lg2", 1002, "配置变更群", cfg2,
+                                   make_shared<QQPolicyFH>(), owner);
+    FH_CHECK(g2->inviteMember(owner, member));
+    // 普通成员无权变更群配置
+    FH_CHECK(!g2->setRecallTimeLimit(member, seconds(60)));
+    FH_CHECK(!g2->setMemberInviteEnabled(member, true));
+    FH_CHECK(g2->getConfig().getRecallTimeLimit() == seconds(120));
+    // 管理员可变更：撤回窗口与邀请开关
+    FH_CHECK(g2->setAdmin(owner, member, true));
+    FH_CHECK(g2->setRecallTimeLimit(member, seconds(60)));
+    FH_CHECK(g2->getConfig().getRecallTimeLimit() == seconds(60));
+    FH_CHECK(g2->setMemberInviteEnabled(member, true));
+    FH_CHECK(g2->getConfig().isMemberInviteEnabled());
+    // 窗口收紧后：窗口外发送的消息不可撤回
+    auto stale = make_shared<MessageFH>("stale", owner, "很久以前的消息",
+                                        system_clock::now() - seconds(61));
+    FH_CHECK(g2->sendMessage(owner, stale));
+    FH_CHECK(!g2->recallMessage(owner, stale->getId()));
+}
+
 }  // namespace
 
 int main() { return ::fhtest::runAll("requirement-alignment-comprehensive"); }

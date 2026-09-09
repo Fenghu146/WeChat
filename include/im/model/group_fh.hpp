@@ -103,6 +103,17 @@ public:
                members_.erase(idOf(target)) == 1;
     }
 
+    // 成员主动退群（任务书 3.(2) 入群 / 退出群 / 挨踢）：
+    // 群主不能直接退群——须先转让群主或解散群，避免群处于“无主”状态；
+    // 非成员、群已解散一律失败。退群不经过策略授权链（无对应 Action），
+    // 由聚合根集中维护不变量。
+    bool leaveGroup(const std::shared_ptr<UserFH>& op) {
+        if (disbanded_ || !op) return false;
+        const auto role = getRole(op);
+        if (!role || *role == GroupRoleFH::OWNER) return false;
+        return members_.erase(idOf(op)) == 1;
+    }
+
     // 禁言 / 解除禁言：成员状态检查发生在授权链中
     bool muteMember(const std::shared_ptr<UserFH>& op,
                     const std::shared_ptr<UserFH>& target, bool muted = true) {
@@ -140,6 +151,26 @@ public:
                          std::chrono::system_clock::now()};
         if (!execute(ActionFH::SET_ALL_MUTE, c)) return false;
         config_.setAllMuted(enabled);
+        return true;
+    }
+
+    // 变更群配置：走 EDIT_GROUP 授权（ADMIN+），用于验证“群设置可动态变更”
+    // —— 撤回时间窗（负数由 GroupConfigFH::validate 拒绝）
+    bool setRecallTimeLimit(const std::shared_ptr<UserFH>& op,
+                            std::chrono::seconds limit) {
+        GroupContextFH c{this, op, nullptr, nullptr,
+                         std::chrono::system_clock::now()};
+        if (!execute(ActionFH::EDIT_GROUP, c)) return false;
+        config_.setRecallTimeLimit(limit);
+        return true;
+    }
+
+    // 变更群配置：QQ 普通成员邀请开关（微信群无此概念，语义上恒为“仅群主”）
+    bool setMemberInviteEnabled(const std::shared_ptr<UserFH>& op, bool enabled) {
+        GroupContextFH c{this, op, nullptr, nullptr,
+                         std::chrono::system_clock::now()};
+        if (!execute(ActionFH::EDIT_GROUP, c)) return false;
+        config_.setMemberInviteEnabled(enabled);
         return true;
     }
 
