@@ -5,3 +5,6 @@ out/
 save_*.dat
 demo_save_*.dat
 ~$*.docx
+
+.DS_Store
+Testing/
