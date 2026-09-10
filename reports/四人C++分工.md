@@ -63,7 +63,7 @@ CMakeLists.txt
 app/main.cpp
 tests/integration_tests.cpp
 README.md
-docs/class-diagram.md
+reports/类图(FH分支全量).md
 ```
 
 ### 交付标准
