@@ -33,7 +33,7 @@ public:
             case PlatformKindFH::QQ:
                 return true;  // QQ：全部类型
             case PlatformKindFH::WeChat:
-                return kind != MessageKindFH::FILE;  // 微信禁文件（简化）
+                return kind != MessageKindFH::DOCUMENT;  // 微信禁文件（简化）
             case PlatformKindFH::Weibo:
                 return kind == MessageKindFH::TEXT ||
                        kind == MessageKindFH::EMOJI;  // 微博仅文本/表情（简化）

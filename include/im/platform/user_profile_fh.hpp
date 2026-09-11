@@ -42,7 +42,9 @@ public:
 
     // 解析该自然人在指定微X 平台的账号号码：QQ/微博共享主号；
     // 微信独立，未绑定微信号时返回空串。
-    std::string platformAccountId(PlatformKindFH platform) const noexcept {
+    // 返回常量引用而不按值返回：本函数处于好友 / 群成员 / 昵称渲染等
+    // 热路径，按值返回会产生大量临时 std::string 拷贝。
+    const std::string& platformAccountId(PlatformKindFH platform) const noexcept {
         switch (platform) {
             case PlatformKindFH::QQ:
             case PlatformKindFH::Weibo:
@@ -50,8 +52,10 @@ public:
             case PlatformKindFH::WeChat:
                 return wechatId_;
             default:
-                return {};
+                break;
         }
+        static const std::string kEmpty;
+        return kEmpty;
     }
     // 该自然人是否拥有某平台的账号（即能否在该平台加好友/入群）
     bool hasPlatformAccount(PlatformKindFH platform) const noexcept {

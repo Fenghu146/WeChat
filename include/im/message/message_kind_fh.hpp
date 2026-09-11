@@ -8,11 +8,11 @@
 // ============================================================
 
 enum class MessageKindFH {
-    TEXT,   // 文本消息（三平台均支持）
-    IMAGE,  // 图片消息
-    FILE,   // 文件消息
-    VOICE,  // 语音消息
-    EMOJI,  // 表情消息
+    TEXT,      // 文本消息（三平台均支持）
+    IMAGE,     // 图片消息
+    DOCUMENT,  // 文件消息（原名 FILE，改名以避免遮蔽 stdio 的 FILE）
+    VOICE,     // 语音消息
+    EMOJI,     // 表情消息
 };
 
 // 消息类型中文展示名
@@ -20,7 +20,7 @@ inline const char* kindToZhName(MessageKindFH kind) {
     switch (kind) {
         case MessageKindFH::TEXT:  return "文本";
         case MessageKindFH::IMAGE: return "图片";
-        case MessageKindFH::FILE:  return "文件";
+        case MessageKindFH::DOCUMENT:  return "文件";
         case MessageKindFH::VOICE: return "语音";
         case MessageKindFH::EMOJI: return "表情";
         default:                   return "其他";

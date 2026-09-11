@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -296,40 +297,44 @@ public:
         std::string line;
         while (std::getline(in, line)) {
             if (line.empty()) continue;
-            std::vector<std::string> f = persist_util_fh::splitFieldsFH(line);
-            if (f[0] == "G" && f.size() >= 9) {
-                GroupInfoFH g;
-                if (!persist_util_fh::platformFromName(f[1], g.platform))
-                    continue;
-                g.groupId = f[2];
-                g.name = persist_util_fh::unescapeTextFH(f[3]);
-                g.ownerId = f[4];
-                g.maxMembers = static_cast<std::size_t>(std::stoul(f[5]));
-                g.predefined = f[6] == "1";
-                if (f[7].size() == 1 && f[7][0] == '-') {  // 空列表占位
-                } else if (!f[7].empty()) {
-                    splitIds(f[7], g.adminIds);
+            try {
+                std::vector<std::string> f = persist_util_fh::splitFieldsFH(line);
+                if (f[0] == "G" && f.size() >= 9) {
+                    GroupInfoFH g;
+                    if (!persist_util_fh::platformFromName(f[1], g.platform))
+                        continue;
+                    g.groupId = f[2];
+                    g.name = persist_util_fh::unescapeTextFH(f[3]);
+                    g.ownerId = f[4];
+                    g.maxMembers = static_cast<std::size_t>(std::stoul(f[5]));
+                    g.predefined = f[6] == "1";
+                    if (f[7].size() == 1 && f[7][0] == '-') {  // 空列表占位
+                    } else if (!f[7].empty()) {
+                        splitIds(f[7], g.adminIds);
+                    }
+                    if (f[8].size() == 1 && f[8][0] == '-') {
+                    } else if (!f[8].empty()) {
+                        splitIds(f[8], g.memberIds);
+                    }
+                    loaded.push_back(std::move(g));
+                } else if (f[0] == "M" && f.size() >= 8 && !loaded.empty()) {
+                    // 消息记录挂到最近一次出现的群（文件按群序写出）
+                    GroupInfoFH& g = loaded.back();
+                    if (g.groupId != f[1]) continue;
+                    GroupChatRecordFH m;
+                    m.kind = static_cast<MessageKindFH>(std::stoi(f[2]));
+                    m.senderId = f[3];
+                    m.senderNick = persist_util_fh::unescapeTextFH(f[4]);
+                    m.content = persist_util_fh::unescapeTextFH(f[5]);
+                    m.isReply = f[6] == "1";
+                    m.sentAt = std::chrono::system_clock::time_point(
+                        std::chrono::system_clock::duration(
+                            std::chrono::system_clock::duration::rep(
+                                std::stoll(f[7]))));
+                    g.chat.push_back(std::move(m));
                 }
-                if (f[8].size() == 1 && f[8][0] == '-') {
-                } else if (!f[8].empty()) {
-                    splitIds(f[8], g.memberIds);
-                }
-                loaded.push_back(std::move(g));
-            } else if (f[0] == "M" && f.size() >= 8 && !loaded.empty()) {
-                // 消息记录挂到最近一次出现的群（文件按群序写出）
-                GroupInfoFH& g = loaded.back();
-                if (g.groupId != f[1]) continue;
-                GroupChatRecordFH m;
-                m.kind = static_cast<MessageKindFH>(std::stoi(f[2]));
-                m.senderId = f[3];
-                m.senderNick = persist_util_fh::unescapeTextFH(f[4]);
-                m.content = persist_util_fh::unescapeTextFH(f[5]);
-                m.isReply = f[6] == "1";
-                m.sentAt = std::chrono::system_clock::time_point(
-                    std::chrono::system_clock::duration(
-                        std::chrono::system_clock::duration::rep(
-                            std::stoll(f[7]))));
-                g.chat.push_back(std::move(m));
+            } catch (const std::exception&) {
+                continue;  // 跳过损坏行：存档被截断/篡改不应导致启动崩溃
             }
         }
         groups_ = std::move(loaded);

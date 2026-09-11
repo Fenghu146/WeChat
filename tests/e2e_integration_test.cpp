@@ -137,7 +137,7 @@ FH_TEST(EndToEnd_OfficialGroupFullFlow) {
                                   MessageKindFH::TEXT, "你好小明"));
     // 微信禁文件
     FH_CHECK(!gr.sendGroupMessage(*xm, PlatformKindFH::WeChat, "1007",
-                                   MessageKindFH::FILE, "合同.docx"));
+                                   MessageKindFH::DOCUMENT, "合同.docx"));
     // 微博禁图片
     FH_CHECK(!gr.sendGroupMessage(*xm, PlatformKindFH::Weibo, "1005",
                                    MessageKindFH::IMAGE, "照片.jpg"));

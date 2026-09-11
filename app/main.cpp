@@ -33,6 +33,9 @@
 #include "client_ui.hpp"
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -546,12 +549,12 @@ void runAutoMessageScenario() {
 
     std::cout << "     小明在 QQ 群 1001 发文件「架构图.pdf」："
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ,
-                                            "1001", MessageKindFH::FILE,
+                                            "1001", MessageKindFH::DOCUMENT,
                                             "架构图.pdf"))
               << "（QQ 支持全部类型）\n";
     std::cout << "     小明在微信群 1007 发文件「合同.docx」："
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat,
-                                            "1007", MessageKindFH::FILE,
+                                            "1007", MessageKindFH::DOCUMENT,
                                             "合同.docx"))
               << "（应失败：微信群禁文件，简化口径）\n";
     std::cout << "     小明在微信群 1007 发图片「晚霞.jpg」："

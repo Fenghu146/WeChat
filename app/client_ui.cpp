@@ -35,6 +35,9 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <conio.h>
 #include <windows.h>
 #else
@@ -73,7 +76,20 @@ using UserPtr = std::shared_ptr<UserFH>;
 
 void cls() {
 #ifdef _WIN32
-    std::system("cls");
+    // 直接调用控制台 API 清屏：此前用 std::system("cls") 每次重绘都会
+    // 创建 cmd.exe 子进程，是界面刷新延迟的主要来源之一。
+    const HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO csbi{};
+    if (hOut != INVALID_HANDLE_VALUE &&
+        GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        const DWORD cells =
+            static_cast<DWORD>(csbi.dwSize.X) * static_cast<DWORD>(csbi.dwSize.Y);
+        const COORD home{0, 0};
+        DWORD written = 0;
+        FillConsoleOutputCharacterA(hOut, ' ', cells, home, &written);
+        FillConsoleOutputAttribute(hOut, csbi.wAttributes, cells, home, &written);
+        SetConsoleCursorPosition(hOut, home);
+    }
 #else
     std::cout << "\x1b[2J\x1b[H";
 #endif
@@ -180,11 +196,17 @@ int chooseByLabels(const std::string& prompt,
     return r < 0 ? -1 : static_cast<int>(r - 1);
 }
 
-// 操作过程反馈：在控制台打印一段短暂的“处理中”动画，使每次操作都有
-// 可见的提交过程（与成功/失败提示条配合）。
-// 说明：本项目为单机内存模型，操作是同步瞬时完成的，该动画是 UI 层的
-// 反馈模拟（真实项目中此处应替换为真实的 I/O 或网络往返等待）。
+// 操作过程反馈。
+// 说明：本项目为单机内存模型，操作同步瞬时完成。此处原有一段“处理中”
+// 动画，但每次操作固定 sleep 5×45ms ≈ 225ms，会让每一次操作都明显变慢。
+// 现默认瞬时返回；如需观察提交过程，可用环境变量 FH_UI_ANIM=1 开启动画。
 void busy(const std::string& what) {
+    static const bool animate = [] {
+        const char* v = std::getenv("FH_UI_ANIM");
+        return v != nullptr && *v != '\0' && !(v[0] == '0' && v[1] == '\0');
+    }();
+    if (!animate) return;
+
     static const char spin[] = {'|', '/', '-', '\\'};
     std::cout << "  " << what << " 处理中 ";
     std::cout.flush();
@@ -245,11 +267,6 @@ void noticeFail(const std::string& msg) { g.notice = "[失败] " + msg; }
 void noticeInfo(const std::string& msg) { g.notice = "[提示] " + msg; }
 
 std::string platCn(PlatformKindFH p) { return toZhName(p); }
-
-std::string accountNo(const ProfilePtr& p, PlatformKindFH platform) {
-    if (!p) return "-";
-    return p->platformAccountId(platform);
-}
 
 const char* zhRole(GroupRoleFH role) { return toZhName(role); }
 
@@ -1039,14 +1056,14 @@ void runOfficialChat(const std::string& groupId) {
             switch (tk) {
                 case '1': kind = MessageKindFH::TEXT; kindName = "文本"; break;
                 case '2': kind = MessageKindFH::IMAGE; kindName = "图片"; break;
-                case '3': kind = MessageKindFH::FILE; kindName = "文件"; break;
+                case '3': kind = MessageKindFH::DOCUMENT; kindName = "文件"; break;
                 case '4': kind = MessageKindFH::VOICE; kindName = "语音"; break;
                 case '5': kind = MessageKindFH::EMOJI; kindName = "表情"; break;
                 case '0':
                 default: noticeInfo("已取消发送"); continue;
             }
             const std::string what =
-                kind == MessageKindFH::IMAGE || kind == MessageKindFH::FILE
+                kind == MessageKindFH::IMAGE || kind == MessageKindFH::DOCUMENT
                     ? "（如图片名/文件名）"
                     : "";
             auto text = askText("  输入" + kindName + "消息" + what +

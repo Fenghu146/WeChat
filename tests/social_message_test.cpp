@@ -138,9 +138,9 @@ FH_TEST(CreateGroupAutoAssignsNumberFrom1007) {
 
 FH_TEST(PlatformSupportsKindMatrix) {
     FH_CHECK(PlatformMessagePolicyFH::supportsKind(PlatformKindFH::QQ,
-                                                   MessageKindFH::FILE));
+                                                   MessageKindFH::DOCUMENT));
     FH_CHECK(!PlatformMessagePolicyFH::supportsKind(PlatformKindFH::WeChat,
-                                                    MessageKindFH::FILE));
+                                                    MessageKindFH::DOCUMENT));
     FH_CHECK(PlatformMessagePolicyFH::supportsKind(PlatformKindFH::WeChat,
                                                    MessageKindFH::IMAGE));
     FH_CHECK(!PlatformMessagePolicyFH::supportsKind(PlatformKindFH::Weibo,
@@ -172,10 +172,10 @@ FH_TEST(SendGroupMessageEnforcesKindLengthAndReply) {
                                   MessageKindFH::TEXT, "非成员发言"));  // 非成员
     // QQ：全类型支持
     FH_CHECK(gr.sendGroupMessage(*p.xm, PlatformKindFH::QQ, "1001",
-                                 MessageKindFH::FILE, "架构图.pdf"));
+                                 MessageKindFH::DOCUMENT, "架构图.pdf"));
     // 微信：禁文件，允许图片
     FH_CHECK(!gr.sendGroupMessage(*p.xm, PlatformKindFH::WeChat, "1007",
-                                  MessageKindFH::FILE, "文件.docx"));
+                                  MessageKindFH::DOCUMENT, "文件.docx"));
     FH_CHECK(gr.sendGroupMessage(*p.xm, PlatformKindFH::WeChat, "1007",
                                  MessageKindFH::IMAGE, "晚霞.jpg"));
     // 微博：仅文本/表情；不支持引用
