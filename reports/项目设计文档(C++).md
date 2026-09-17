@@ -1,10 +1,10 @@
-# QQ / 微信群组管理课程设计项目设计文档（C++ 版 · 合并版）
+# QQ / 微信群组管理课程设计项目设计文档（C++ 版）
 
-> 版本：2.1（FH 分支落地修订，2026-09）
-> 语言与工具链：C++17、CMake、GoogleTest（课程环境不便时可退化为标准库 `assert`；FH 分支已落地自包含断言 + ctest）
+> 版本：2.1（落地修订，2026-09）
+> 语言与工具链：C++17、CMake、自包含断言框架 + ctest（离线环境零第三方依赖）
 > 核心主题：Strategy Pattern + Template Method 处理 QQ / 微信群组行为差异
-> 说明：本文合并并取代原 Java 版设计文档（`group-platform-policy-design.md`）与本文件的历史初稿，两版冲突的裁决记录见附录 A。
-> FH 落地说明：正文规则为权威基线；代码实现统一 **FH 后缀 + `include/im/`** 布局（阶段 A~D 全部完成，回归测试已接入 ctest）。正文中的 `include/group/...` 路径与无后缀类名均为早期参考骨架表述，实际以 `include/im/*_fh.hpp` 为准（完整映射见 `四人C++分工.md`“落地状态”表）。
+> 说明：本文为设计的权威基线，正文规则已对照课程任务书逐条核对；历次口径修订记录见附录 A。
+> 落地说明：正文规则为权威基线；代码实现统一 **FH 后缀 + `include/im/`** 布局（阶段 A~D 全部完成，回归测试已接入 ctest）。正文中的 `include/group/...` 路径与无后缀类名均为早期参考骨架表述，实际以 `include/im/*_fh.hpp` 为准（完整映射见 `实现计划与验收清单.md` 的“模块划分与落地状态”表）。
 
 ## 1. 项目概述
 
@@ -126,14 +126,14 @@ Group ── 1..* ── GroupMembership ── 1 ── User
 | `INVITE_MEMBER` | `memberInviteEnabled` 开启时普通成员可邀请；关闭时仅 ADMIN+ | 仅 OWNER 可邀请（“微信群只能推荐加入”，任务书 3.(3)），ADMIN/普通成员均禁止 |
 | `SET_ALL_MUTE` | ADMIN+ 可执行 | 仅 OWNER 可执行 |
 
-> 裁决说明：初稿矩阵中“微信邀请默认禁止 / 管理员以上”与代码（`isPrivileged`）存在矛盾，合并版曾统一为“仅 ADMIN+ 可邀请”。后对照课程任务书 3.(3)“QQ 群有以群主为核心的管理员制度而微信群仅有群主为特权账号”，最终口径为**微信群仅 OWNER 可邀请**（注册表推荐制入群 `inviteIntoGroup` 同口径），管理员在微信群不产生任何特权；从 QQ 群动态切换为微信群时成员与角色数据保留，权限按微信口径重新解释。
+> 口径说明：早期矩阵中“微信邀请默认禁止 / 管理员以上”与代码（`isPrivileged`）存在矛盾，曾统一为“仅 ADMIN+ 可邀请”。后对照课程任务书 3.(3)“QQ 群有以群主为核心的管理员制度而微信群仅有群主为特权账号”，最终口径为**微信群仅 OWNER 可邀请**（注册表推荐制入群 `inviteIntoGroup` 同口径），管理员在微信群不产生任何特权；从 QQ 群动态切换为微信群时成员与角色数据保留，权限按微信口径重新解释。
 
 #### 3.3.3 公共状态约束（两平台一致，置于父类）
 
 - **发言**：被单员禁言的普通成员不能发送消息；全员禁言期间普通成员不能发送消息；OWNER / ADMIN 不受两种禁言影响。
 - **撤回**：消息撤回受 `GroupConfig.recallTimeLimit` 时间窗约束；普通成员只能撤回本人消息，OWNER / ADMIN 可撤回任何消息；已撤回消息不可再次撤回。
 
-> 裁决说明：初稿中“全员禁言判断”在 QQ / 微信两个策略中重复实现，且 `GroupMembership.muted` 字段从未被任何检查消费。合并版将两平台一致的状态约束上提为公共步骤 `checkStateRules`，消除重复并修复禁言失效问题。
+> 口径说明：早期实现中“全员禁言判断”在 QQ / 微信两个策略中重复实现，且 `GroupMembership.muted` 字段从未被任何检查消费。重构后将两平台一致的状态约束上提为公共步骤 `checkStateRules`，消除重复并修复禁言失效问题。
 
 ## 4. UML 类图
 
@@ -440,7 +440,7 @@ bool AbstractGroupPolicy::isPrivileged(const GroupContext& c) const {
 
 ### 5.3 QQPolicy 与 WeChatPolicy
 
-平台子类只保留真正的平台差异。初稿中重复的 `SEND_MESSAGE` 全员禁言判断和两个子类完全相同的 `getMaxGroupSize` 实现已删除（分别上提到 `checkStateRules` 与父类默认实现）。
+平台子类只保留真正的平台差异。早期实现中重复的 `SEND_MESSAGE` 全员禁言判断和两个子类完全相同的 `getMaxGroupSize` 实现已删除（分别上提到 `checkStateRules` 与父类默认实现）。
 
 ```cpp
 // include/group/policy/qq_policy.hpp
@@ -923,19 +923,19 @@ Group
 
 本设计满足课程设计最重要的几个要求：领域对象清晰、职责边界明确、平台差异可替换、公共流程可复用、实现规模可控，并且能够用真实业务规则解释所使用的设计模式。
 
-## 附录 A：合并冲突裁决记录
+## 附录 A：设计口径修订记录
 
-本文由《group-platform-policy-design.md》（Java 版 v1.0）与本文档 C++ 初稿合并而成，以下冲突点已裁决并全文统一：
+本文为设计权威基线。实现过程中对早期设计口径做过以下修订，均已全文统一：
 
-| # | 冲突点 | Java 版表述 | C++ 初稿表述 | 合并裁决 |
-|---|---|---|---|---|
-| 1 | 微信 SET_ALL_MUTE | 矩阵标 ADMIN ✓，备注“可收紧为群主” | 矩阵写“平台决定”，代码为仅群主 | 公共权限 ADMIN+，微信平台规则收紧为仅群主 |
-| 2 | 微信 INVITE_MEMBER | “管理员以上” | 矩阵写“默认禁止”（与其代码 `isPrivileged` 矛盾） | 仅 ADMIN+ 可邀请，普通成员禁止 |
-| 3 | SEND_MESSAGE 全员禁言判断 | 在两个平台策略中重复实现 | 同样重复 | 上提为公共步骤 `checkStateRules`，平台子类删除该逻辑 |
-| 4 | 单成员禁言 | `muted` 字段无任何检查消费 | 同 | `checkStateRules` 中统一检查，修复禁言失效 |
-| 5 | RECALL_MESSAGE | 矩阵承诺但无实现 | 同 | 新增 `recallMessage` + 时间窗与消息归属规则 |
-| 6 | 管理员产生途径 | 无设管理员入口 | 同 | 新增 `ASSIGN_ADMIN`（仅群主任免） |
-| 7 | getMaxGroupSize | 两个子类重复实现 | 同 | 默认实现上提到 `AbstractGroupPolicy`，子类按需覆写 |
-| 8 | 群主初始化 / 唯一性 | 文字提及但无代码 | 未提及 | 构造函数注入群主，天然保证单群主 |
-| 9 | 成员存储 | `ArrayList` 线性查找 | `std::vector` 线性查找 | `unordered_map<id, membership>`：O(1) 查找 + 天然去重 |
-| 10 | 模板方法步骤 | 5 步 | 5 步 | 6 步（新增公共状态约束步骤） |
+| # | 议题 | 早期口径 | 修订后口径 |
+|---|---|---|---|
+| 1 | 微信 SET_ALL_MUTE | 矩阵标 ADMIN ✓，备注“可收紧为群主” | 公共权限 ADMIN+，微信平台规则收紧为仅群主 |
+| 2 | 微信 INVITE_MEMBER | “管理员以上”与“默认禁止”两种表述并存，与代码 `isPrivileged` 矛盾 | 微信群仅 OWNER 可邀请，普通成员与管理员均禁止 |
+| 3 | SEND_MESSAGE 全员禁言判断 | 在两个平台策略中重复实现 | 上提为公共步骤 `checkStateRules`，平台子类删除该逻辑 |
+| 4 | 单成员禁言 | `muted` 字段无任何检查消费 | `checkStateRules` 中统一检查，修复禁言失效 |
+| 5 | RECALL_MESSAGE | 矩阵承诺但无实现 | 新增 `recallMessage` + 时间窗与消息归属规则 |
+| 6 | 管理员产生途径 | 无设管理员入口 | 新增 `ASSIGN_ADMIN`（仅群主任免） |
+| 7 | getMaxGroupSize | 两个子类重复实现 | 默认实现上提到 `AbstractGroupPolicy`，子类按需覆写 |
+| 8 | 群主初始化 / 唯一性 | 文字提及但无代码 | 构造函数注入群主，天然保证单群主 |
+| 9 | 成员存储 | 顺序容器线性查找 | `unordered_map<id, membership>`：O(1) 查找 + 天然去重 |
+| 10 | 模板方法步骤 | 5 步 | 6 步（新增公共状态约束步骤） |
