@@ -382,17 +382,13 @@ ProfilePtr pickProfile(bool excludeSelf, std::optional<PlatformKindFH> needAcct,
 
 void drawAccountCard() {
     const auto& p = g.me;
-    std::cout << "  账号：[" << p->getNickname() << "]（QQ/微博号 "
-              << p->getQQId() << "，" << p->getLocation() << "，T龄 "
-              << p->tAge(g.year) << " 年）";
-    if (p->hasWeChatAccount())
-        std::cout << "  微信号 " << p->getWeChatId();
-    else
-        std::cout << "  微信未绑定";
-    std::cout << "\n";
+    std::cout << "  当前账号   " << p->getNickname() << "（QQ/微博 " << p->getQQId()
+              << " · " << p->getLocation() << " · T龄 " << p->tAge(g.year) << " 年）\n";
+    std::cout << "  微信账号   "
+              << (p->hasWeChatAccount() ? p->getWeChatId() : "未绑定") << "\n";
 
     // 三层维度互相独立：是否有账号(身份) → 是否开通(用户自选) → 是否登录(在线)
-    std::cout << "  服务状态：";
+    std::cout << "  服务状态   ";
     const char* sep = "";
     for (const auto pl :
          {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo}) {
@@ -406,10 +402,9 @@ void drawAccountCard() {
             if (p->isOnline(pl)) state += "·在线";
         }
         std::cout << sep << platCn(pl) << "[" << state << "]";
-        sep = "  ";
+        sep = "   ";
     }
     std::cout << "\n";
-    std::cout << "          （有账号=已有该服务号码；已开通=用户自选启用；·在线=已登录）\n";
 }
 
 // ============================================================
@@ -1478,13 +1473,13 @@ void runServiceCenter() {
     for (;;) {
         cls();
         uiRule("账号中心（阶段 B · 多产品体系）");
+        std::cout << "\n";
         drawAccountCard();
 
         // 平台规则小字提示
-        std::cout << "  平台规则：QQ/微博共享号码；微信独立号码可绑定一个 QQ；\n"
-                     "            开通后才能登录；任一服务登录后其余已开通服务自动登录。\n"
-                     "  三层口径：有账号（身份）→ 已开通（你自选启用，任务书第 4 点）→ 在线（已登录）；\n"
-                     "            三者互相独立，例如“已绑定微信号”不等于“已开通微信服务”。\n"
+        std::cout << "  平台规则：QQ/微博共享号码，微信独立号码可绑定 QQ；开通后才能登录；\n"
+                     "            任一服务登录后其余已开通服务自动登录。\n"
+                     "  状态口径：有账号 → 已开通（自选启用）→ 在线；三者独立，绑定微信号 ≠ 已开通微信。\n"
                      "  ------------------------------------------------------------------\n";
         std::cout << "  [1]开通服务  [2]取消开通  [3]绑定微信号\n"
                      "  [4]登录服务  [5]退出单服务 [6]退出全部\n"
@@ -2040,8 +2035,8 @@ bool runAccountGate() {
         }
         if (num >= 1 && num <= hits.size()) {
             g.me = hits[num - 1];
-            g.notice = "[提示] 当前操作账号：" + g.me->getNickname() +
-                       "。建议先到【账号中心】确认服务状态，再到【官方群大厅】/【创建】开始。";
+            g.notice = "[提示] 当前账号：" + g.me->getNickname() +
+                       "。建议先到【账号中心】确认服务状态。";
             return true;
         }
         noticeFail("无效选择。");
@@ -2055,7 +2050,9 @@ bool runAccountGate() {
 void runHelp() {
     cls();
     uiRule("手动测试指引（建议按顺序走查）");
-    std::cout << R"guide(【A · 正式群管理（本地正式群）】
+    std::cout << R"guide(【体系说明】群分两套：正式群（聚合根 GroupFH，群号 9000+，走【创建】）
+  与官方/自建群（群注册表，群号 1001~1006 / 1007+，走【官方群大厅】）。
+【A · 正式群管理（本地正式群）】
   1) 创建 QQ 正式群与微信群各一个（允许普通成员邀请开关选一次开/关）；
   2) 切换到其他账号把对方邀请进群、任命管理员；
   3) 分别用不同身份测试：普通成员邀请（QQ开关 vs 微信禁止）、
@@ -2092,8 +2089,10 @@ bool runWorkspace() {
     for (;;) {
         cls();
         uiRule("微X 平台 · 终端客户端（手动测试工作台）");
+        std::cout << "\n";
         drawAccountCard();
-        std::cout << "  —— 我的会话概览 ——\n";
+
+        std::cout << "\n  —— 我的会话概览 ——\n";
         {
             int nLocal = 0, nOfficial = 0, nDisc = 0;
             for (const auto& s : g.locals) {
@@ -2104,17 +2103,18 @@ bool runWorkspace() {
                 (void)gi, ++nOfficial;
             for (const auto& d : g.discs)
                 if (!d->isDisbanded() && d->contains(g.me->getQQId())) ++nDisc;
-            std::cout << "     正式群 " << nLocal << " · 官方/自建群 " << nOfficial
-                      << " · QQ 讨论组 " << nDisc << "\n";
-            std::cout << "     （正式群=聚合根体系，官方群=群注册表体系，两者入口不同）\n";
+            std::cout << "     正式群 " << nLocal << "   ·   官方/自建群 " << nOfficial
+                      << "   ·   QQ 讨论组 " << nDisc << "\n";
         }
-        std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]我的会话（进入聊天）  [2]官方群大厅  [3]通讯录·好友\n";
-        std::cout << "  [4]账号中心·开通/登录  [5]创建正式群/讨论组\n";
-        std::cout << "  [6]切换账号/注册新账号  [7]测试指引  [0]退出\n";
-        std::cout << "  " << g.notice << "\n";
+
+        std::cout << "\n  —— 主菜单 ——\n"
+                     "     [1] 我的会话          [2] 官方群大厅         [3] 通讯录·好友\n"
+                     "     [4] 账号中心          [5] 创建群 / 讨论组    [6] 切换账号\n"
+                     "     [7] 测试指引          [0] 退出\n";
+
+        if (!g.notice.empty()) std::cout << "\n  " << g.notice << "\n";
         g.notice.clear();
-        std::cout << "  请按键选择：";
+        std::cout << "\n  请按键选择：";
         const char k = waitKey();
         switch (k) {
         case '1': runConversationList(); break;
