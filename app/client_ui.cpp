@@ -1768,10 +1768,38 @@ void runContacts() {
             const auto rec = g.friends.recommendFriendsFrom(
                 *g.me, g.registry, from, to);
             if (rec.empty()) {
-                noticeInfo(std::string("暂无可推荐：你须已开通来源与目标服务") +
-                           "（任务书 6.(3)），对方须已是你的" + toZhName(from) +
-                           "好友、绑定了" + toZhName(to) + "，且尚非你的" +
-                           toZhName(to) + "好友。");
+                // 无候选时逐条回显前置条件与当前状态，避免用户以为功能损坏
+                const std::size_t fromFriendCount =
+                    g.friends.friendIds(*g.me, from).size();
+                std::size_t withTarget = 0;  // 候选：已绑定目标平台账号的人
+                std::size_t notYetTarget = 0;  // 其中尚非目标平台好友的人
+                for (const auto& p : g.people) {
+                    if (p == g.me || !p->hasPlatformAccount(to)) continue;
+                    ++withTarget;
+                    if (!g.friends.isFriend(*g.me, *p, to)) ++notYetTarget;
+                }
+                auto mark = [](bool ok) { return ok ? "✔" : "✘"; };
+                cls();
+                uiRule("跨服务推荐添加好友 · 暂无可推荐");
+                std::cout << "  方向：" << toZhName(from) << " 好友 → 添加"
+                          << toZhName(to) << "好友（任务书 2.(2)、6.(3)）\n"
+                          << "  以下条件须同时满足，逐条核对当前状态：\n";
+                std::cout << "   ① 本人已开通来源与目标服务："
+                          << toZhName(from) << " " << mark(g.me->isActivated(from))
+                          << "  " << toZhName(to) << " " << mark(g.me->isActivated(to))
+                          << "    ← 【账号中心】[1]开通服务\n";
+                std::cout << "   ② 对方已是你的" << toZhName(from) << "好友：当前 "
+                          << fromFriendCount << " 人"
+                          << (fromFriendCount ? "" : "    ← 【通讯录】[1]先加好友")
+                          << "\n";
+                std::cout << "   ③ 对方已绑定" << toZhName(to) << "账号：候选 "
+                          << withTarget << " 人\n";
+                std::cout << "   ④ 对方尚不是你的" << toZhName(to) << "好友：其中 "
+                          << notYetTarget << " 人满足\n";
+                std::cout << "  建议顺序：账号中心开通" << toZhName(to) << " → 通讯录加 "
+                          << toZhName(from) << "好友 → 回到 [9] 选择本方向\n";
+                std::cout << "  按任意键返回：";
+                waitKey();
                 continue;
             }
             std::vector<std::string> labels;
