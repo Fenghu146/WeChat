@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -343,8 +344,21 @@ void seedWorld() {
     }
 }
 
+// 好友关系标注（选择列表用）：QQ/微信为双向好友，微博为单向关注
+std::string friendMark(const ProfilePtr& p, PlatformKindFH pl) {
+    if (pl == PlatformKindFH::Weibo)
+        return g.friends.isFollowing(*g.me, *p) ? "  ［已关注］" : "  ［未关注］";
+    return g.friends.isFriend(*g.me, *p, pl)
+               ? ("  ［已是" + platCn(pl) + "好友］")
+               : ("  ［非" + platCn(pl) + "好友］");
+}
+
+// annotate 非空时，在每项后追加状态标注（如「已是QQ好友」「已在群内」）。
+// 同一选择器同时服务「加好友」和「删好友」等相反意图，因此标注状态而非过滤名单：
+// 既避免误操作，也保留「重复添加被拒绝」这类规则的可演示性。
 ProfilePtr pickProfile(bool excludeSelf, std::optional<PlatformKindFH> needAcct,
-                       const std::string& prompt) {
+                       const std::string& prompt,
+                       const std::function<std::string(const ProfilePtr&)>& annotate = {}) {
     std::vector<std::string> labels;
     std::vector<ProfilePtr> hits;
     for (const auto& p : g.people) {
@@ -353,7 +367,8 @@ ProfilePtr pickProfile(bool excludeSelf, std::optional<PlatformKindFH> needAcct,
         std::string wx = p->hasWeChatAccount()
                              ? (" 微信:" + p->getWeChatId())
                              : " 微信:未绑定";
-        labels.push_back(p->getNickname() + "  QQ/微博:" + p->getQQId() + wx);
+        labels.push_back(p->getNickname() + "  QQ/微博:" + p->getQQId() + wx +
+                         (annotate ? annotate(p) : std::string()));
         hits.push_back(p);
     }
     if (hits.empty()) {
@@ -836,10 +851,15 @@ void runLocalChat(const LocalSlot& slot) {
             continue;
         }
         case '3': {  // 邀请成员（只能邀请拥有本平台账号的人）
-            const auto target =
-                pickProfile(/*excludeSelf=*/true, live.platform,
-                            "  选择要邀请的人（" + platCn(live.platform) +
-                                " 账号）> ");
+            const auto target = pickProfile(
+                /*excludeSelf=*/true, live.platform,
+                "  选择要邀请的人（" + platCn(live.platform) + " 账号）> ",
+                [&live](const ProfilePtr& p) -> std::string {
+                    const auto u = actorFor(p, live.platform);
+                    if (!u) return std::string();
+                    return live.group->contains(u) ? std::string("  ［已在群内］")
+                                                   : std::string("  ［不在群内］");
+                });
             if (!target) continue;
             const auto tu = actorFor(target, live.platform);
             busy("邀请处理");
@@ -1193,9 +1213,13 @@ void runDiscChat(std::size_t index) {
         const char k = waitKey();
         switch (k) {
         case '1': {
-            const auto target =
-                pickProfile(/*excludeSelf=*/true, PlatformKindFH::QQ,
-                            "  选择要邀请的人（QQ 账号）> ");
+            const auto target = pickProfile(
+                /*excludeSelf=*/true, PlatformKindFH::QQ,
+                "  选择要邀请的人（QQ 账号）> ",
+                [&disc](const ProfilePtr& p) -> std::string {
+                    return disc->contains(p->getQQId()) ? std::string("  ［已在组内］")
+                                                        : std::string("  ［不在组内］");
+                });
             if (!target) continue;
             busy("邀请入组");
             if (disc->invite(*g.me, *target))
@@ -1595,40 +1619,47 @@ void runContacts() {
         std::cout << "  请按键选择：";
         const char k = waitKey();
         ProfilePtr target = nullptr;
-        auto needPick = [&](PlatformKindFH pl, const std::string& title) -> bool {
-            target = pickProfile(/*excludeSelf=*/true, pl, title);
+        auto needPick = [&](PlatformKindFH pl, const std::string& title,
+                            bool markRelation = false) -> bool {
+            std::function<std::string(const ProfilePtr&)> annotate;
+            if (markRelation)
+                annotate = [pl](const ProfilePtr& p) { return friendMark(p, pl); };
+            target = pickProfile(/*excludeSelf=*/true, pl, title, annotate);
             return target != nullptr;
         };
         switch (k) {
         case '1':
-            if (needPick(PlatformKindFH::QQ, "  选择要添加为 QQ 好友的人> ")) {
+            if (needPick(PlatformKindFH::QQ, "  选择要添加为 QQ 好友的人> ", true)) {
                 busy("好友处理");
                 if (g.friends.makeFriends(*g.me, *target, PlatformKindFH::QQ))
                     noticeOK("与 " + target->getNickname() + " 已成为 QQ 好友（双向）。");
                 else
-                    noticeFail("添加失败：可能是自己、重复好友、或对方没有 QQ 号。");
+                    noticeFail("添加失败：你与 " + target->getNickname() +
+                               " 在 QQ 已存在好友关系（双向好友不能重复添加）。");
             }
             continue;
         case '2':
-            if (needPick(PlatformKindFH::WeChat, "  选择要添加为微信好友的人> ")) {
+            if (needPick(PlatformKindFH::WeChat, "  选择要添加为微信好友的人> ", true)) {
                 busy("好友处理");
                 if (g.friends.makeFriends(*g.me, *target, PlatformKindFH::WeChat))
                     noticeOK("与 " + target->getNickname() + " 已成为微信好友（双方均需绑定微信）。");
                 else
-                    noticeFail("添加失败：双方都必须已绑定微信号，且不能重复/自己。");
+                    noticeFail("添加失败：你与 " + target->getNickname() +
+                               " 在微信已存在好友关系（重复添加无效）。");
             }
             continue;
         case '3':
-            if (needPick(PlatformKindFH::Weibo, "  选择要微博关注的人> ")) {
+            if (needPick(PlatformKindFH::Weibo, "  选择要微博关注的人> ", true)) {
                 busy("关注处理");
                 if (g.friends.follow(*g.me, *target))
                     noticeOK("已关注 " + target->getNickname() + "（微博单向关注）。");
                 else
-                    noticeFail("关注失败：微博是单向关注，不能重复、不能自己关注自己。");
+                    noticeFail("关注失败：你已关注 " + target->getNickname() +
+                               "（微博为单向关注，不能重复关注）。");
             }
             continue;
         case '4':
-            if (needPick(PlatformKindFH::QQ, "  选择要删除的 QQ 好友> ")) {
+            if (needPick(PlatformKindFH::QQ, "  选择要删除的 QQ 好友> ", true)) {
                 busy("删除好友");
                 if (g.friends.unfriend(*g.me, *target, PlatformKindFH::QQ))
                     noticeOK("已删除 QQ 好友 " + target->getNickname() +
@@ -1638,7 +1669,7 @@ void runContacts() {
             }
             continue;
         case '5':
-            if (needPick(PlatformKindFH::WeChat, "  选择要删除的微信好友> ")) {
+            if (needPick(PlatformKindFH::WeChat, "  选择要删除的微信好友> ", true)) {
                 busy("删除好友");
                 if (g.friends.unfriend(*g.me, *target, PlatformKindFH::WeChat))
                     noticeOK("已删除微信好友 " + target->getNickname() + "。");
@@ -1647,7 +1678,7 @@ void runContacts() {
             }
             continue;
         case '6':
-            if (needPick(PlatformKindFH::Weibo, "  选择要取消关注的人> ")) {
+            if (needPick(PlatformKindFH::Weibo, "  选择要取消关注的人> ", true)) {
                 busy("取关处理");
                 if (g.friends.unfollow(*g.me, *target))
                     noticeOK("已取消关注 " + target->getNickname() + "。");
@@ -1661,7 +1692,7 @@ void runContacts() {
                                {"QQ 好友", "微信好友"});
             if (pl >= 0 &&
                 needPick(pl == 0 ? PlatformKindFH::QQ : PlatformKindFH::WeChat,
-                         "  选择要备注的好友> ")) {
+                         "  选择要备注的好友> ", true)) {
                 const auto remark = askText("  输入备注名（直接回车取消）> ");
                 if (remark) {
                     const PlatformKindFH pf = pl == 0 ? PlatformKindFH::QQ
