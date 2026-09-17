@@ -308,7 +308,7 @@ void runAutoSocialScenario() {
     std::cout << "     小明添加小红为微信好友：" 
               << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::WeChat)) << "\n";
     std::cout << "     小明关注路人乙（微博单向）：" 
-              << ok(friends.makeFriends(*xiaoming, *lurenB, PlatformKindFH::Weibo)) << "\n";
+              << ok(friends.follow(*xiaoming, *lurenB)) << "\n";
     std::cout << "     QQ 好友关系不影响微博：" 
               << ok(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::Weibo)) 
               << "（应失败）\n";
@@ -319,11 +319,26 @@ void runAutoSocialScenario() {
     std::cout << "     小明和小红的微博共同关注数量：" 
               << friends.commonFriends(*xiaoming, *xiaohong, PlatformKindFH::Weibo).size() << "\n";
 
-    std::cout << "\n[C3] 跨服务推荐添加好友\n";
-    std::cout << "     小明从 QQ 好友推荐添加微信好友：" 
-              << ok(friends.addFriendFromRecommendation(*xiaoming, *xiaohong, 
-                                                         PlatformKindFH::QQ, PlatformKindFH::WeChat)) 
-              << "（已是好友，应失败）\n";
+    std::cout << "\n[C3] 跨服务推荐添加好友（任务书 2.(2)、6.(3)）\n";
+    // 前置条件：本人已开通来源与目标服务，对方须有目标平台账号
+    ActivationManagerFH activation;
+    activation.activate(*xiaoming, PlatformKindFH::QQ);
+    activation.activate(*xiaoming, PlatformKindFH::WeChat);
+    registry.bindWeChat(lurenB, "wx-88-0003");
+    activation.activate(*lurenB, PlatformKindFH::WeChat);
+    friends.makeFriends(*xiaoming, *lurenB, PlatformKindFH::QQ);
+    std::cout << "     小明已开通 QQ/微信；路人乙已绑定微信，且与小明是 QQ 好友\n";
+    std::cout << "     QQ → 微信 可推荐人数："
+              << friends.recommendFriendsFrom(*xiaoming, registry, PlatformKindFH::QQ,
+                                              PlatformKindFH::WeChat).size() << "\n";
+    std::cout << "     小明依 QQ 好友推荐添加路人乙为微信好友："
+              << ok(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
+                                                        PlatformKindFH::QQ, PlatformKindFH::WeChat))
+              << "\n";
+    std::cout << "     重复推荐添加（已是微信好友）："
+              << ok(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
+                                                        PlatformKindFH::QQ, PlatformKindFH::WeChat))
+              << "（应失败：已是好友）\n";
 
     std::cout << "\n[C4] 群注册表与预置官方群\n";
     std::cout << "     小明申请加入 QQ 群 1001：" 
@@ -343,6 +358,56 @@ void runAutoSocialScenario() {
     std::cout << "     小明解散讨论组：" 
               << ok(dg.disband(*xiaoming)) << "\n";
 
+    std::cout << "\n[C6] 断电保存（任务书 6.(1)/优化(2)：析构写回 → 启动加载）\n";
+    {
+        const std::string actFile = "demo_save_activation.dat";
+        const std::string friendFile = "demo_save_friends.dat";
+        const std::string groupFile = "demo_save_groups.dat";
+        {
+            // 进程一：造数据，容器析构时写回文件
+            UserRegistryFH regA;
+            auto a = regA.registerUser("90001", "演示甲", "2000-01-01", "北京", 2018);
+            auto b = regA.registerUser("90002", "演示乙", "2000-02-02", "上海", 2019);
+            regA.bindWeChat(a, "wx-90001");
+            regA.bindWeChat(b, "wx-90002");
+            regA.setActivationPath(actFile);
+            ActivationManagerFH actA;
+            actA.activate(*a, PlatformKindFH::QQ);
+            actA.activate(*a, PlatformKindFH::WeChat);
+            FriendRegistryFH friA;
+            friA.setPersistencePath(friendFile);
+            friA.makeFriends(*a, *b, PlatformKindFH::QQ);
+            GroupRegistryFH grpA;
+            grpA.setPersistencePath(groupFile);
+            grpA.createGroup(*a, PlatformKindFH::QQ, "保存演示群");
+            std::cout << "     进程一：开通 2 项 / 好友 1 对 / 自建群 1 个 → 析构写回文件\n";
+        }
+        {
+            // 进程二：全新容器从文件读入（模拟系统重启加载）
+            UserRegistryFH regB;
+            auto a = regB.registerUser("90001", "演示甲", "2000-01-01", "北京", 2018);
+            auto b = regB.registerUser("90002", "演示乙", "2000-02-02", "上海", 2019);
+            regB.bindWeChat(a, "wx-90001");
+            regB.bindWeChat(b, "wx-90002");
+            regB.setActivationPath(actFile);
+            FriendRegistryFH friB;
+            friB.setPersistencePath(friendFile);
+            GroupRegistryFH grpB;
+            grpB.setPersistencePath(groupFile);
+            const GroupInfoFH* saved = grpB.findGroup("1007");
+            std::cout << "     进程二（模拟重启）：开通恢复 " << a->activatedPlatforms().size()
+                      << " 项 / 好友恢复 " << ok(friB.isFriend(*a, *b, PlatformKindFH::QQ))
+                      << " / 群恢复 " << ok(saved != nullptr) << "\n";
+            if (saved)
+                std::cout << "       群 " << saved->groupId << "「" << saved->name
+                          << "」群主 " << saved->ownerId << "，成员 "
+                          << saved->memberIds.size() << " 人\n";
+        }
+        std::remove(actFile.c_str());
+        std::remove(friendFile.c_str());
+        std::remove(groupFile.c_str());
+    }
+
     std::cout << "======== 阶段 C 自动演示结束 ========\n";
 }
 
@@ -358,7 +423,23 @@ void runAutoMessageScenario() {
 
     GroupRegistryFH groups;
 
-    std::cout << "[D1] 消息类型能力差异\n";
+    // 前置准备：成员先入群/建群，否则后续发送会因“非群成员”被拒
+    std::cout << "[D0] 消息演示前置：入群 / 建群\n";
+    std::cout << "     小明入群 QQ 1001 / 微博 1005（QQ/微博群可申请加入）："
+              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
+              << " / "
+              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::Weibo, "1005")) << "\n";
+    std::cout << "     小明直接申请加入微信群 1003："
+              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
+              << "（应失败：微信群只能推荐加入）\n";
+    std::cout << "     小明自建微信群“家人群”（群号 1007）："
+              << ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")) << "\n";
+    std::cout << "     小红入群 QQ 1001 / 微博 1005："
+              << ok(groups.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001"))
+              << " / "
+              << ok(groups.joinGroup(*xiaohong, PlatformKindFH::Weibo, "1005")) << "\n";
+
+    std::cout << "\n[D1] 消息类型能力差异\n";
     std::cout << "     小明在 QQ 群 1001 发送文件：" 
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ, "1001",
                                            MessageKindFH::DOCUMENT, "架构图.pdf")) << "\n";
@@ -366,10 +447,18 @@ void runAutoMessageScenario() {
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
                                            MessageKindFH::DOCUMENT, "合同.docx")) 
               << "（应失败，微信群禁文件）\n";
+    std::cout << "     小明在微信群 1007 发送图片：" 
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
+                                           MessageKindFH::IMAGE, "风景.jpg")) 
+              << "（微信群允许图片）\n";
     std::cout << "     小明在微博群 1005 发送图片：" 
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
                                            MessageKindFH::IMAGE, "风景.jpg")) 
               << "（应失败，微博仅支持文本/表情）\n";
+    std::cout << "     小明在微博群 1005 发送文本：" 
+              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
+                                           MessageKindFH::TEXT, "今晚一起讨论任务书")) 
+              << "（微博允许文本）\n";
 
     std::cout << "\n[D2] 引用回复能力差异\n";
     std::cout << "     小红在 QQ 群引用回复：" 
