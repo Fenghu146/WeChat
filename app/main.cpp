@@ -12,6 +12,7 @@
 
 #include "demo_runner.hpp"
 #include "client_ui.hpp"
+#include "ui_screen.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -37,7 +38,7 @@ int main(int argc, char** argv) {
     const bool demoAll = (arg == "--demo" || arg == "demo");
     const bool demoOne = arg.rfind("--demo=", 0) == 0 && arg.size() > 7;
 
-    std::cout << "==== 模拟即时通信平台：QQ 群 / 微信群管理（作者代号 FH） ====\n";
+    std::cout << fh_ui::rule("模拟即时通信平台：QQ 群 / 微信群管理（作者代号 FH）") << "\n";
     if (demoAll) {
         DemoRunner::runAllDemoScenarios();
         DemoRunner::printDemoSummary();

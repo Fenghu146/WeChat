@@ -41,6 +41,8 @@
 #include "im/social/group_chat_record_fh.hpp"
 #include "im/social/group_registry_fh.hpp"
 
+#include "ui_screen.hpp"
+
 namespace DemoRunner {
 namespace {
 
@@ -165,27 +167,38 @@ std::string formatClock(std::chrono::system_clock::time_point tp) {
 }
 
 void printMembers(const std::string& title, const GroupFH& group) {
-    std::cout << "  [" << title << "] " << group.getName()
-              << "（群号 " << group.getGroupNumber() << "），成员数 "
-              << group.members().size() << "：\n";
+    std::cout << "  "
+              << fh_ui::section(title + " · " + group.getName() + "（群号 " +
+                                std::to_string(group.getGroupNumber()) + "），成员 " +
+                                std::to_string(group.members().size()) + " 人")
+              << "\n";
+    fh_ui::Rows rows;
     for (const auto& kv : group.members()) {
         const auto& m = kv.second;
-        std::cout << "     - " << m.getUser()->getNickname()
-                  << "（ID " << m.getUser()->getId() << "）角色："
-                  << toZhName(m.getRole())
-                  << "，加入 " << formatClock(m.getJoinedAt())
-                  << (m.isMuted() ? " ［被禁言］" : "") << "\n";
+        rows.add(" " + m.getUser()->getNickname() + "（ID " +
+                     m.getUser()->getId() + "）",
+                 std::string(toZhName(m.getRole())) + "，加入 " +
+                     formatClock(m.getJoinedAt()) +
+                     (m.isMuted() ? " ［被禁言］" : ""));
     }
+    rows.flush(std::cout, 5);
 }
 
 void printMessages(const std::string& title, const GroupFH& group) {
-    std::cout << "  [" << title << "] 消息记录 " << group.messages().size()
-              << " 条：\n";
-    for (const auto& msg : group.messages()) {
-        std::cout << "     - " << msg->getSender()->getNickname() << "："
-                  << msg->getContent()
-                  << (msg->isRecalled() ? " ［已撤回］" : "") << "\n";
-    }
+    std::cout << "  "
+              << fh_ui::section(title + " · 消息记录 " +
+                                std::to_string(group.messages().size()) + " 条")
+              << "\n";
+    fh_ui::Rows rows;
+    for (const auto& msg : group.messages())
+        rows.add(" " + msg->getSender()->getNickname(),
+                 msg->getContent() + (msg->isRecalled() ? " ［已撤回］" : ""));
+    rows.flush(std::cout, 5);
+}
+
+// 统一小节标题：与手动工作台共用同一套设计语言（—— 小节 ——）
+void step(const std::string& id, const std::string& text) {
+    std::cout << "\n" << fh_ui::section(id + " " + text) << "\n";
 }
 
 // 打印自然人的当前在线服务列表
@@ -220,7 +233,7 @@ std::string toTimeText(std::chrono::system_clock::time_point tp) {
 } // namespace
 
 void runAutoScenario() {
-    std::cout << "\n=========== 自动演示：QQ 群 vs 微信群（核心流程） ===========\n";
+    std::cout << "\n" << fh_ui::rule("自动演示：QQ 群 vs 微信群（核心流程）") << "\n";
 
     auto owner    = std::make_shared<UserFH>("10001", "群主本人");
     auto admin    = std::make_shared<UserFH>("10002", "小管理");
@@ -236,104 +249,141 @@ void runAutoScenario() {
                     GroupConfigFH(50, true, false, std::chrono::seconds(120)),
                     std::make_shared<WeChatPolicyFH>(), owner);
 
-    std::cout << "[1] 群主邀请成员入群，并分别任命管理员：\n";
-    std::cout << "    QQ 邀请小管理 / 普通成员："
-              << ok(qqGroup.inviteMember(owner, admin)) << " / "
-              << ok(qqGroup.inviteMember(owner, member)) << "\n";
-    std::cout << "    微信邀请小管理 / 普通成员："
-              << ok(wxGroup.inviteMember(owner, admin)) << " / "
-              << ok(wxGroup.inviteMember(owner, member)) << "\n";
-    std::cout << "    QQ 任命小管理为管理员："
-              << ok(qqGroup.setAdmin(owner, admin, true)) << "\n";
-    std::cout << "    微信任命小管理为管理员："
-              << ok(wxGroup.setAdmin(owner, admin, true)) << "\n";
+    step("[1]", "群主邀请成员入群，并分别任命管理员");
+    {
+        // 逐条求值再用结果拼串：一条表达式里放两次状态调用会因求值顺序未定义而错序
+        const std::string qqInviteAdmin = ok(qqGroup.inviteMember(owner, admin));
+        const std::string qqInviteMember = ok(qqGroup.inviteMember(owner, member));
+        const std::string wxInviteAdmin = ok(wxGroup.inviteMember(owner, admin));
+        const std::string wxInviteMember = ok(wxGroup.inviteMember(owner, member));
+        fh_ui::Rows rows;
+        rows.add("QQ 邀请小管理 / 普通成员", qqInviteAdmin + " / " + qqInviteMember);
+        rows.add("微信邀请小管理 / 普通成员", wxInviteAdmin + " / " + wxInviteMember);
+        rows.add("QQ 任命小管理为管理员", ok(qqGroup.setAdmin(owner, admin, true)));
+        rows.add("微信任命小管理为管理员", ok(wxGroup.setAdmin(owner, admin, true)));
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[2] 邀请规则差异：\n";
-    std::cout << "    QQ 普通成员邀请路人甲（开关开启）："
-              << ok(qqGroup.inviteMember(member, outsider)) << "\n";
-    std::cout << "    微信普通成员邀请路人甲：" << okDenied(wxGroup.inviteMember(member, outsider))
-              << "（应失败，微信群仅群主可推荐加入）\n";
-    std::cout << "    微信管理员邀请路人甲：" << okDenied(wxGroup.inviteMember(admin, outsider))
-              << "（应失败，同上；微信管理员不产生特权）\n";
-    std::cout << "    微信群主邀请路人甲：" << ok(wxGroup.inviteMember(owner, outsider))
-              << "（仅群主可邀请）\n";
-    std::cout << "    路人甲再次加入 QQ 群（成员唯一）："
-              << okDenied(qqGroup.inviteMember(owner, outsider)) << "（应失败）\n";
+    step("[2]", "邀请规则差异");
+    {
+        fh_ui::Rows rows;
+        rows.add("QQ 普通成员邀请路人甲（开关开启）",
+                 ok(qqGroup.inviteMember(member, outsider)));
+        rows.add("微信普通成员邀请路人甲",
+                 okDenied(wxGroup.inviteMember(member, outsider)),
+                 "（应失败，微信群仅群主可推荐加入）");
+        rows.add("微信管理员邀请路人甲",
+                 okDenied(wxGroup.inviteMember(admin, outsider)),
+                 "（应失败，同上；微信管理员不产生特权）");
+        rows.add("微信群主邀请路人甲",
+                 ok(wxGroup.inviteMember(owner, outsider)), "（仅群主可邀请）");
+        rows.add("路人甲再次加入 QQ 群（成员唯一）",
+                 okDenied(qqGroup.inviteMember(owner, outsider)), "（应失败）");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[3] 全员禁言设置差异：\n";
-    std::cout << "    QQ 管理员设置全员禁言：" << ok(qqGroup.setAllMute(admin, true)) << "\n";
-    std::cout << "    微信管理员设置全员禁言：" << okDenied(wxGroup.setAllMute(admin, true))
-              << "（应失败，仅群主）\n";
-    std::cout << "    微信群主设置全员禁言：" << ok(wxGroup.setAllMute(owner, true)) << "\n";
+    step("[3]", "全员禁言设置差异");
+    {
+        fh_ui::Rows rows;
+        rows.add("QQ 管理员设置全员禁言", ok(qqGroup.setAllMute(admin, true)));
+        rows.add("微信管理员设置全员禁言",
+                 okDenied(wxGroup.setAllMute(admin, true)), "（应失败，仅群主）");
+        rows.add("微信群主设置全员禁言", ok(wxGroup.setAllMute(owner, true)));
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[4] 全员禁言下的发言限制：\n";
-    std::cout << "    QQ 普通成员发言：" << okDenied(qqGroup.sendMessage(
-                  member, makeMessage(member, "禁言期间的发言")))
-              << "（应失败）\n";
-    std::cout << "    QQ 群主发言：" << ok(qqGroup.sendMessage(
-                  owner, makeMessage(owner, "群主不受禁言影响")))
-              << "\n";
-    qqGroup.setAllMute(owner, false);
-    wxGroup.setAllMute(owner, false);
-    std::cout << "    （两群随后由群主解除全员禁言）\n";
+    step("[4]", "全员禁言下的发言限制");
+    {
+        fh_ui::Rows rows;
+        rows.add("QQ 普通成员发言",
+                 okDenied(qqGroup.sendMessage(member,
+                                              makeMessage(member, "禁言期间的发言"))),
+                 "（应失败）");
+        rows.add("QQ 群主发言",
+                 ok(qqGroup.sendMessage(owner,
+                                        makeMessage(owner, "群主不受禁言影响"))));
+        rows.flush(std::cout, 5);
+        qqGroup.setAllMute(owner, false);
+        wxGroup.setAllMute(owner, false);
+        std::cout << "     （两群随后由群主解除全员禁言）\n";
+    }
 
-    std::cout << "\n[5] 动态切换群管理模式（官方：成员数据不受伤害）：\n";
-    std::cout << "    QQ 群切到\"微信模式\"后，管理员设全员禁言："
-              << ok(qqGroup.switchPolicy(std::make_shared<WeChatPolicyFH>()))
-              << "，执行结果：" << okDenied(qqGroup.setAllMute(admin, true))
-              << "（应失败）\n";
-    std::cout << "    QQ 群切回\"QQ 模式\"后，管理员设全员禁言："
-              << ok(qqGroup.switchPolicy(qqPolicy)) << "，执行结果："
-              << ok(qqGroup.setAllMute(admin, true)) << "（应成功）\n";
-    qqGroup.setAllMute(owner, false);
-    std::cout << "    切换前后群成员数不变：" << qqGroup.members().size()
-              << "（成员数据未受伤害）\n";
+    step("[5]", "动态切换群管理模式（官方：成员数据不受伤害）");
+    {
+        // 切换与随后的禁言必须严格先后执行，故分步求值
+        const std::string switchedToWx =
+            ok(qqGroup.switchPolicy(std::make_shared<WeChatPolicyFH>()));
+        const std::string wxAdminMute = okDenied(qqGroup.setAllMute(admin, true));
+        const std::string switchedToQq = ok(qqGroup.switchPolicy(qqPolicy));
+        const std::string qqAdminMute = ok(qqGroup.setAllMute(admin, true));
+        qqGroup.setAllMute(owner, false);
 
-    std::cout << "\n[6] 撤回消息（归属 + 时间窗）：\n";
+        fh_ui::Rows rows;
+        rows.add("QQ 群切到“微信模式”后，管理员设全员禁言",
+                 switchedToWx + "，执行结果：" + wxAdminMute, "（应失败）");
+        rows.add("QQ 群切回“QQ 模式”后，管理员设全员禁言",
+                 switchedToQq + "，执行结果：" + qqAdminMute, "（应成功）");
+        rows.add("切换前后群成员数不变",
+                 std::to_string(qqGroup.members().size()) + " 人",
+                 "（成员数据未受伤害）");
+        rows.flush(std::cout, 5);
+    }
+
+    step("[6]", "撤回消息（归属 + 时间窗）");
     auto msgByMember = makeMessage(member, "大家好呀");
     auto msgByOwner = makeMessage(owner, "这是群主的消息");
     qqGroup.sendMessage(member, msgByMember);
     qqGroup.sendMessage(owner, msgByOwner);
-    std::cout << "    普通成员撤回自己的消息："
-              << ok(qqGroup.recallMessage(member, msgByMember->getId())) << "\n";
-    std::cout << "    普通成员撤回群主的消息："
-              << okDenied(qqGroup.recallMessage(member, msgByOwner->getId()))
-              << "（应失败，只能撤回本人消息）\n";
-    std::cout << "    群主撤回自己的消息："
-              << ok(qqGroup.recallMessage(owner, msgByOwner->getId())) << "\n";
+    {
+        fh_ui::Rows rows;
+        rows.add("普通成员撤回自己的消息",
+                 ok(qqGroup.recallMessage(member, msgByMember->getId())));
+        rows.add("普通成员撤回群主的消息",
+                 okDenied(qqGroup.recallMessage(member, msgByOwner->getId())),
+                 "（应失败，只能撤回本人消息）");
+        rows.add("群主撤回自己的消息",
+                 ok(qqGroup.recallMessage(owner, msgByOwner->getId())));
 
-    // 时间窗边界：构造"发送时刻早于窗口"的消息复现超时，无需真实等待
-    const long long limitSec =
-        static_cast<long long>(qqGroup.getConfig().getRecallTimeLimit().count());
-    auto staleMsg = std::make_shared<MessageFH>(
-        "m-stale", owner, "很久以前的消息",
-        std::chrono::system_clock::now() - std::chrono::seconds(limitSec + 1));
-    qqGroup.sendMessage(owner, staleMsg);
-    std::cout << "    群主撤回 " << (limitSec + 1) << " 秒前发送的消息："
-              << okDenied(qqGroup.recallMessage(owner, staleMsg->getId()))
-              << "（应失败：超出 " << limitSec << " 秒撤回窗口）\n";
-    auto freshMsg = makeMessage(owner, "刚刚发送的消息");
-    qqGroup.sendMessage(owner, freshMsg);
-    std::cout << "    群主撤回刚发送的消息："
-              << ok(qqGroup.recallMessage(owner, freshMsg->getId()))
-              << "（应成功：在 " << limitSec << " 秒窗口内）\n";
+        // 时间窗边界：构造“发送时刻早于窗口”的消息复现超时，无需真实等待
+        const long long limitSec =
+            static_cast<long long>(qqGroup.getConfig().getRecallTimeLimit().count());
+        auto staleMsg = std::make_shared<MessageFH>(
+            "m-stale", owner, "很久以前的消息",
+            std::chrono::system_clock::now() - std::chrono::seconds(limitSec + 1));
+        qqGroup.sendMessage(owner, staleMsg);
+        rows.add("群主撤回 " + std::to_string(limitSec + 1) + " 秒前发送的消息",
+                 okDenied(qqGroup.recallMessage(owner, staleMsg->getId())),
+                 "（应失败：超出 " + std::to_string(limitSec) + " 秒撤回窗口）");
+        auto freshMsg = makeMessage(owner, "刚刚发送的消息");
+        qqGroup.sendMessage(owner, freshMsg);
+        rows.add("群主撤回刚发送的消息",
+                 ok(qqGroup.recallMessage(owner, freshMsg->getId())),
+                 "（应成功：在 " + std::to_string(limitSec) + " 秒窗口内）");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[7] 任命管理员与转让群主：\n";
-    std::cout << "    群主任命普通成员为管理员："
-              << ok(qqGroup.setAdmin(owner, member, true)) << "\n";
-    std::cout << "    普通成员（已管理员）无权再任命别人："
-              << okDenied(qqGroup.setAdmin(member, outsider, true)) << "（应失败）\n";
-    std::cout << "    群主将群转让给原管理员："
-              << ok(qqGroup.transferOwner(owner, admin)) << "\n";
+    step("[7]", "任命管理员与转让群主");
+    {
+        fh_ui::Rows rows;
+        rows.add("群主任命普通成员为管理员",
+                 ok(qqGroup.setAdmin(owner, member, true)));
+        rows.add("普通成员（已管理员）无权再任命别人",
+                 okDenied(qqGroup.setAdmin(member, outsider, true)), "（应失败）");
+        rows.add("群主将群转让给原管理员",
+                 ok(qqGroup.transferOwner(owner, admin)));
+        rows.flush(std::cout, 5);
+    }
 
+    std::cout << "\n";
     printMembers("QQ 群", qqGroup);
     printMembers("微信群", wxGroup);
     printMessages("QQ 群", qqGroup);
-    std::cout << "=========== 自动演示结束 ===========\n";
+    std::cout << "\n" << fh_ui::rule("阶段 A 自动演示结束") << "\n";
 }
 
 void runAutoPlatformScenario() {
-    std::cout << "\n======== 自动演示：多产品账号 / 开通 / 登录（任务书 1·4·5） ========\n";
+    std::cout << "\n"
+              << fh_ui::rule("自动演示：多产品账号 / 开通 / 登录（任务书 1·4·5）") << "\n";
     UserRegistryFH registry;
     ActivationManagerFH activation;
     LoginManagerFH login;
@@ -342,90 +392,123 @@ void runAutoPlatformScenario() {
     auto xiaoming = registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
     auto xiaohong = registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
 
-    std::cout << "[B1] 号码体系：QQ 与微博共享 ID，微信独立可绑定 QQ\n";
+    step("[B1]", "号码体系：QQ 与微博共享 ID，微信独立可绑定 QQ");
     {
         auto qq = registry.makeAccount(*xiaoming, PlatformKindFH::QQ);
         auto wb = registry.makeAccount(*xiaoming, PlatformKindFH::Weibo);
-        std::cout << "     " << xiaoming->getNickname() << " 的 QQ 号：" << qq.getAccountId()
-                  << "（昵称 " << qq.getNickname() << "，所在地 " << qq.getLocation()
-                  << "，T 龄 " << qq.tAge(CURRENT_YEAR) << " 年）\n";
-        std::cout << "     微博号：" << wb.getAccountId() << "（与 QQ 号码相同）\n";
+        fh_ui::Rows rows;
+        rows.add(xiaoming->getNickname() + " 的 QQ 号", qq.getAccountId(),
+                 "（昵称 " + qq.getNickname() + "，所在地 " + qq.getLocation() +
+                     "，T 龄 " + std::to_string(qq.tAge(CURRENT_YEAR)) + " 年）");
+        rows.add("微博号", wb.getAccountId(), "（与 QQ 号码相同）");
+        rows.flush(std::cout, 5);
     }
 
-    std::cout << "\n[B2] 自选开通微X 服务（ActivationManagerFH）\n";
-    std::cout << "     开通 QQ：" << ok(activation.activate(*xiaoming, PlatformKindFH::QQ)) << "\n";
-    std::cout << "     开通微博（QQ 同号即具资格）："
-              << ok(activation.activate(*xiaoming, PlatformKindFH::Weibo)) << "\n";
-    std::cout << "     未绑定微信号就开通微信："
-              << okDenied(activation.activate(*xiaoming, PlatformKindFH::WeChat)) << "（应失败）\n";
-    std::cout << "     为小明绑定微信号 wx-88-0001："
-              << ok(registry.bindWeChat(xiaoming, "wx-88-0001")) << "\n";
-    std::cout << "     绑定后开通微信："
-              << ok(activation.activate(*xiaoming, PlatformKindFH::WeChat)) << "\n";
-    std::cout << "     重复开通 QQ（幂等）："
-              << okDenied(activation.activate(*xiaoming, PlatformKindFH::QQ)) << "（应失败）\n";
-    std::cout << "     " << xiaoming->getNickname() << " 已开通：";
-    for (PlatformKindFH p : xiaoming->activatedPlatforms())
-        std::cout << toZhName(p) << " ";
-    std::cout << "（共 " << activation.activatedCount(*xiaoming) << " 个微X 服务）\n";
+    step("[B2]", "自选开通微X 服务（ActivationManagerFH）");
+    {
+        fh_ui::Rows rows;
+        rows.add("开通 QQ", ok(activation.activate(*xiaoming, PlatformKindFH::QQ)));
+        rows.add("开通微博（QQ 同号即具资格）",
+                 ok(activation.activate(*xiaoming, PlatformKindFH::Weibo)));
+        rows.add("未绑定微信号就开通微信",
+                 okDenied(activation.activate(*xiaoming, PlatformKindFH::WeChat)),
+                 "（应失败）");
+        rows.add("为小明绑定微信号 wx-88-0001",
+                 ok(registry.bindWeChat(xiaoming, "wx-88-0001")));
+        rows.add("绑定后开通微信",
+                 ok(activation.activate(*xiaoming, PlatformKindFH::WeChat)));
+        rows.add("重复开通 QQ（幂等）",
+                 okDenied(activation.activate(*xiaoming, PlatformKindFH::QQ)),
+                 "（应失败）");
+        rows.flush(std::cout, 5);
+        std::cout << "     " << xiaoming->getNickname() << " 已开通：";
+        for (PlatformKindFH p : xiaoming->activatedPlatforms())
+            std::cout << toZhName(p) << " ";
+        std::cout << "（共 " << activation.activatedCount(*xiaoming) << " 个微X 服务）\n";
+    }
 
-    std::cout << "\n[B3] 微信账号与 QQ 绑定关系（AccountInfoFH）\n";
-    auto wx = registry.makeAccount(*xiaoming, PlatformKindFH::WeChat);
-    std::cout << "     微信号：" << wx.getAccountId() << "，绑定 QQ："
-              << (wx.hasBindQQ() ? wx.getBindQqId() : "无") << "\n";
+    step("[B3]", "微信账号与 QQ 绑定关系（AccountInfoFH）");
+    {
+        auto wx = registry.makeAccount(*xiaoming, PlatformKindFH::WeChat);
+        fh_ui::Rows rows;
+        rows.add("微信号", wx.getAccountId());
+        rows.add("绑定 QQ", wx.hasBindQQ() ? wx.getBindQqId() : std::string("无"));
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[B4] 登录联动：登录一个服务 → 其余已开通服务自动登录\n";
-    std::cout << "     小红尚未开通服务，登录 QQ："
-              << okDenied(login.login(*xiaohong, PlatformKindFH::QQ)) << "（应失败）\n";
-    std::cout << "     小明登录 QQ：" << ok(login.login(*xiaoming, PlatformKindFH::QQ)) << "\n";
+    step("[B4]", "登录联动：登录一个服务 → 其余已开通服务自动登录");
+    {
+        fh_ui::Rows rows;
+        rows.add("小红尚未开通服务，登录 QQ",
+                 okDenied(login.login(*xiaohong, PlatformKindFH::QQ)), "（应失败）");
+        rows.add("小明登录 QQ", ok(login.login(*xiaoming, PlatformKindFH::QQ)));
+        rows.flush(std::cout, 5);
+    }
     printOnlinePlatforms("小明", login.onlinePlatforms(*xiaoming));
 
-    std::cout << "\n[B5] 单服务退出与取消开通规则\n";
-    std::cout << "     在线状态直接取消开通微博："
-              << okDenied(activation.deactivate(*xiaoming, PlatformKindFH::Weibo))
-              << "（应失败，须先退出登录）\n";
-    std::cout << "     退出微博登录："
-              << ok(login.logout(*xiaoming, PlatformKindFH::Weibo)) << "\n";
+    step("[B5]", "单服务退出与取消开通规则");
+    {
+        fh_ui::Rows rows;
+        rows.add("在线状态直接取消开通微博",
+                 okDenied(activation.deactivate(*xiaoming, PlatformKindFH::Weibo)),
+                 "（应失败，须先退出登录）");
+        rows.add("退出微博登录", ok(login.logout(*xiaoming, PlatformKindFH::Weibo)));
+        rows.flush(std::cout, 5);
+    }
     printOnlinePlatforms("小明", login.onlinePlatforms(*xiaoming));
-    std::cout << "     退出微博后取消开通微博："
-              << ok(activation.deactivate(*xiaoming, PlatformKindFH::Weibo)) << "\n";
+    {
+        fh_ui::Rows rows;
+        rows.add("退出微博后取消开通微博",
+                 ok(activation.deactivate(*xiaoming, PlatformKindFH::Weibo)));
+        rows.flush(std::cout, 5);
+    }
     std::cout << "     剩余开通服务：";
     for (PlatformKindFH p : xiaoming->activatedPlatforms()) std::cout << toZhName(p) << " ";
-    std::cout << "\n======== 阶段 B 自动演示结束 ========\n";
+    std::cout << "\n" << fh_ui::rule("阶段 B 自动演示结束") << "\n";
 }
 
 void runAutoSocialScenario() {
-    std::cout << "\n======== 自动演示：好友 / 群注册表 / QQ 临时讨论组（阶段 C） ========\n";
+    std::cout << "\n"
+              << fh_ui::rule("自动演示：好友 / 群注册表 / QQ 临时讨论组（阶段 C）") << "\n";
 
     UserRegistryFH registry;
     auto xiaoming = registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
     auto xiaohong = registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
     auto lurenB = registry.registerUser("10003", "路人乙", "2001-03-03", "四川·成都", 2020);
-    
+
     registry.bindWeChat(xiaoming, "wx-88-0001");
     registry.bindWeChat(xiaohong, "wx-88-0002");
 
     FriendRegistryFH friends;
     GroupRegistryFH groups;
 
-    std::cout << "[C1] 好友按平台隔离（QQ/微信双向，微博单向关注）\n";
-    std::cout << "     小明添加小红为 QQ 好友：" 
-              << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ)) << "\n";
-    std::cout << "     小明添加小红为微信好友：" 
-              << ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::WeChat)) << "\n";
-    std::cout << "     小明关注路人乙（微博单向）：" 
-              << ok(friends.follow(*xiaoming, *lurenB)) << "\n";
-    std::cout << "     QQ 好友关系不影响微博：" 
-              << okDenied(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::Weibo))
-              << "（应失败）\n";
+    step("[C1]", "好友按平台隔离（QQ/微信双向，微博单向关注）");
+    {
+        fh_ui::Rows rows;
+        rows.add("小明添加小红为 QQ 好友",
+                 ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ)));
+        rows.add("小明添加小红为微信好友",
+                 ok(friends.makeFriends(*xiaoming, *xiaohong, PlatformKindFH::WeChat)));
+        rows.add("小明关注路人乙（微博单向）", ok(friends.follow(*xiaoming, *lurenB)));
+        rows.add("QQ 好友关系不影响微博",
+                 okDenied(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::Weibo)),
+                 "（应失败）");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[C2] 共同好友查询\n";
-    std::cout << "     小明和小红的 QQ 共同好友数量：" 
-              << friends.commonFriends(*xiaoming, *xiaohong, PlatformKindFH::QQ).size() << "\n";
-    std::cout << "     小明和小红的微博共同关注数量：" 
-              << friends.commonFriends(*xiaoming, *xiaohong, PlatformKindFH::Weibo).size() << "\n";
+    step("[C2]", "共同好友查询");
+    {
+        fh_ui::Rows rows;
+        rows.add("小明和小红的 QQ 共同好友数量",
+                 std::to_string(friends.commonFriends(*xiaoming, *xiaohong,
+                                                      PlatformKindFH::QQ).size()) + " 人");
+        rows.add("小明和小红的微博共同关注数量",
+                 std::to_string(friends.commonFriends(*xiaoming, *xiaohong,
+                                                      PlatformKindFH::Weibo).size()) + " 人");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[C3] 跨服务推荐添加好友（任务书 2.(2)、6.(3)）\n";
+    step("[C3]", "跨服务推荐添加好友（任务书 2.(2)、6.(3)）");
     // 前置条件：本人已开通来源与目标服务，对方须有目标平台账号
     ActivationManagerFH activation;
     activation.activate(*xiaoming, PlatformKindFH::QQ);
@@ -434,37 +517,50 @@ void runAutoSocialScenario() {
     activation.activate(*lurenB, PlatformKindFH::WeChat);
     friends.makeFriends(*xiaoming, *lurenB, PlatformKindFH::QQ);
     std::cout << "     小明已开通 QQ/微信；路人乙已绑定微信，且与小明是 QQ 好友\n";
-    std::cout << "     QQ → 微信 可推荐人数："
-              << friends.recommendFriendsFrom(*xiaoming, registry, PlatformKindFH::QQ,
-                                              PlatformKindFH::WeChat).size() << "\n";
-    std::cout << "     小明依 QQ 好友推荐添加路人乙为微信好友："
-              << ok(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
-                                                        PlatformKindFH::QQ, PlatformKindFH::WeChat))
-              << "\n";
-    std::cout << "     重复推荐添加（已是微信好友）："
-              << okDenied(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
-                                                              PlatformKindFH::QQ, PlatformKindFH::WeChat))
-              << "（应失败：已是好友）\n";
+    {
+        fh_ui::Rows rows;
+        rows.add("QQ → 微信 可推荐人数",
+                 std::to_string(friends.recommendFriendsFrom(*xiaoming, registry,
+                                                             PlatformKindFH::QQ,
+                                                             PlatformKindFH::WeChat).size()) +
+                     " 人");
+        rows.add("小明依 QQ 好友推荐添加路人乙为微信好友",
+                 ok(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
+                                                        PlatformKindFH::QQ,
+                                                        PlatformKindFH::WeChat)));
+        rows.add("重复推荐添加（已是微信好友）",
+                 okDenied(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
+                                                              PlatformKindFH::QQ,
+                                                              PlatformKindFH::WeChat)),
+                 "（应失败：已是好友）");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[C4] 群注册表与预置官方群\n";
-    std::cout << "     小明申请加入 QQ 群 1001：" 
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001")) << "\n";
-    std::cout << "     小明申请加入微信群 1003："
-              << okDenied(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
-              << "（应失败，微信群只能推荐加入）\n";
-    std::cout << "     小明自建微信群：" 
-              << ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")) << "\n";
+    step("[C4]", "群注册表与预置官方群");
+    {
+        fh_ui::Rows rows;
+        rows.add("小明申请加入 QQ 群 1001",
+                 ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001")));
+        rows.add("小明申请加入微信群 1003",
+                 okDenied(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003")),
+                 "（应失败，微信群只能推荐加入）");
+        rows.add("小明自建微信群",
+                 ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")));
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[C5] QQ 临时讨论组\n";
-    DiscussionGroupFH dg("dg-001", "临时讨论组", xiaoming->platformAccountId(PlatformKindFH::QQ));
-    std::cout << "     小明创建讨论组并邀请小红：" 
-              << ok(dg.invite(*xiaoming, *xiaohong)) << "\n";
-    std::cout << "     小红自由退组：" 
-              << ok(dg.quit(*xiaohong)) << "\n";
-    std::cout << "     小明解散讨论组：" 
-              << ok(dg.disband(*xiaoming)) << "\n";
+    step("[C5]", "QQ 临时讨论组");
+    {
+        DiscussionGroupFH dg("dg-001", "临时讨论组",
+                             xiaoming->platformAccountId(PlatformKindFH::QQ));
+        fh_ui::Rows rows;
+        rows.add("小明创建讨论组并邀请小红", ok(dg.invite(*xiaoming, *xiaohong)));
+        rows.add("小红自由退组", ok(dg.quit(*xiaohong)));
+        rows.add("小明解散讨论组", ok(dg.disband(*xiaoming)));
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[C6] 断电保存（任务书 6.(1)/优化(2)：析构写回 → 启动加载）\n";
+    step("[C6]", "断电保存（任务书 6.(1)/优化(2)：析构写回 → 启动加载）");
     {
         const std::string actFile = "demo_save_activation.dat";
         const std::string friendFile = "demo_save_friends.dat";
@@ -504,94 +600,121 @@ void runAutoSocialScenario() {
             std::cout << "     进程二（模拟重启）：开通恢复 " << a->activatedPlatforms().size()
                       << " 项 / 好友恢复 " << ok(friB.isFriend(*a, *b, PlatformKindFH::QQ))
                       << " / 群恢复 " << ok(saved != nullptr) << "\n";
-            if (saved)
-                std::cout << "       群 " << saved->groupId << "「" << saved->name
-                          << "」群主 " << saved->ownerId << "，成员 "
-                          << saved->memberIds.size() << " 人\n";
+            if (saved) {
+                fh_ui::Rows rows;
+                rows.add("群 " + saved->groupId + "「" + saved->name + "」",
+                         "群主 " + saved->ownerId + "，成员 " +
+                             std::to_string(saved->memberIds.size()) + " 人");
+                rows.flush(std::cout, 7);
+            }
         }
         std::remove(actFile.c_str());
         std::remove(friendFile.c_str());
         std::remove(groupFile.c_str());
     }
 
-    std::cout << "======== 阶段 C 自动演示结束 ========\n";
+    std::cout << "\n" << fh_ui::rule("阶段 C 自动演示结束") << "\n";
 }
 
 void runAutoMessageScenario() {
-    std::cout << "\n======== 自动演示：群消息平台差异与群消息扩展（阶段 D） ========\n";
+    std::cout << "\n"
+              << fh_ui::rule("自动演示：群消息平台差异与群消息扩展（阶段 D）") << "\n";
 
     UserRegistryFH registry;
     auto xiaoming = registry.registerUser("10001", "小明", "2000-06-01", "广东·深圳", 2018);
     auto xiaohong = registry.registerUser("10002", "小红", "1999-11-11", "湖南·长沙", 2016);
-    
+
     registry.bindWeChat(xiaoming, "wx-88-0001");
     registry.bindWeChat(xiaohong, "wx-88-0002");
 
     GroupRegistryFH groups;
 
     // 前置准备：成员先入群/建群，否则后续发送会因“非群成员”被拒
-    std::cout << "[D0] 消息演示前置：入群 / 建群\n";
-    std::cout << "     小明入群 QQ 1001 / 微博 1005（QQ/微博群可申请加入）："
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"))
-              << " / "
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::Weibo, "1005")) << "\n";
-    std::cout << "     小明直接申请加入微信群 1003："
-              << okDenied(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
-              << "（应失败：微信群只能推荐加入）\n";
-    std::cout << "     小明自建微信群“家人群”（群号 1007）："
-              << ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")) << "\n";
-    std::cout << "     小红入群 QQ 1001 / 微博 1005："
-              << ok(groups.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001"))
-              << " / "
-              << ok(groups.joinGroup(*xiaohong, PlatformKindFH::Weibo, "1005")) << "\n";
+    step("[D0]", "消息演示前置：入群 / 建群");
+    {
+        const std::string mingQqJoin = ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001"));
+        const std::string mingWbJoin = ok(groups.joinGroup(*xiaoming, PlatformKindFH::Weibo, "1005"));
+        const std::string hongQqJoin = ok(groups.joinGroup(*xiaohong, PlatformKindFH::QQ, "1001"));
+        const std::string hongWbJoin = ok(groups.joinGroup(*xiaohong, PlatformKindFH::Weibo, "1005"));
+        fh_ui::Rows rows;
+        rows.add("小明入群 QQ 1001 / 微博 1005（QQ/微博群可申请加入）",
+                 mingQqJoin + " / " + mingWbJoin);
+        rows.add("小明直接申请加入微信群 1003",
+                 okDenied(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003")),
+                 "（应失败：微信群只能推荐加入）");
+        rows.add("小明自建微信群“家人群”（群号 1007）",
+                 ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")));
+        rows.add("小红入群 QQ 1001 / 微博 1005", hongQqJoin + " / " + hongWbJoin);
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[D1] 消息类型能力差异\n";
-    std::cout << "     小明在 QQ 群 1001 发送文件：" 
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ, "1001",
-                                           MessageKindFH::DOCUMENT, "架构图.pdf")) << "\n";
-    std::cout << "     小明在微信群 1007 发送文件：" 
-              << okDenied(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
-                                                 MessageKindFH::DOCUMENT, "合同.docx"))
-              << "（应失败，微信群禁文件）\n";
-    std::cout << "     小明在微信群 1007 发送图片：" 
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
-                                           MessageKindFH::IMAGE, "风景.jpg")) 
-              << "（微信群允许图片）\n";
-    std::cout << "     小明在微博群 1005 发送图片：" 
-              << okDenied(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
-                                                 MessageKindFH::IMAGE, "风景.jpg"))
-              << "（应失败，微博仅支持文本/表情）\n";
-    std::cout << "     小明在微博群 1005 发送文本：" 
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
-                                           MessageKindFH::TEXT, "今晚一起讨论任务书")) 
-              << "（微博允许文本）\n";
+    step("[D1]", "消息类型能力差异");
+    {
+        fh_ui::Rows rows;
+        rows.add("小明在 QQ 群 1001 发送文件",
+                 ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ, "1001",
+                                            MessageKindFH::DOCUMENT, "架构图.pdf")));
+        rows.add("小明在微信群 1007 发送文件",
+                 okDenied(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
+                                                  MessageKindFH::DOCUMENT, "合同.docx")),
+                 "（应失败，微信群禁文件）");
+        rows.add("小明在微信群 1007 发送图片",
+                 ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
+                                            MessageKindFH::IMAGE, "风景.jpg")),
+                 "（微信群允许图片）");
+        rows.add("小明在微博群 1005 发送图片",
+                 okDenied(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
+                                                  MessageKindFH::IMAGE, "风景.jpg")),
+                 "（应失败，微博仅支持文本/表情）");
+        rows.add("小明在微博群 1005 发送文本",
+                 ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
+                                            MessageKindFH::TEXT, "今晚一起讨论任务书")),
+                 "（微博允许文本）");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[D2] 引用回复能力差异\n";
-    std::cout << "     小红在 QQ 群引用回复：" 
-              << ok(groups.sendGroupMessage(*xiaohong, PlatformKindFH::QQ, "1001",
-                                           MessageKindFH::TEXT, "收到", true)) << "\n";
-    std::cout << "     小红在微博群引用回复："
-              << okDenied(groups.sendGroupMessage(*xiaohong, PlatformKindFH::Weibo, "1005",
-                                                 MessageKindFH::TEXT, "收到", true))
-              << "（应失败，微博不支持引用）\n";
+    step("[D2]", "引用回复能力差异");
+    {
+        fh_ui::Rows rows;
+        rows.add("小红在 QQ 群引用回复",
+                 ok(groups.sendGroupMessage(*xiaohong, PlatformKindFH::QQ, "1001",
+                                            MessageKindFH::TEXT, "收到", true)));
+        rows.add("小红在微博群引用回复",
+                 okDenied(groups.sendGroupMessage(*xiaohong, PlatformKindFH::Weibo, "1005",
+                                                  MessageKindFH::TEXT, "收到", true)),
+                 "（应失败，微博不支持引用）");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[D3] 文本长度限制\n";
-    std::cout << "     QQ 群文本上限：" 
-              << PlatformMessagePolicyFH::maxTextLength(PlatformKindFH::QQ) << " 字符\n";
-    std::cout << "     微信群文本上限：" 
-              << PlatformMessagePolicyFH::maxTextLength(PlatformKindFH::WeChat) << " 字符\n";
-    std::cout << "     微博群文本上限：" 
-              << PlatformMessagePolicyFH::maxTextLength(PlatformKindFH::Weibo) << " 字符\n";
+    step("[D3]", "文本长度限制");
+    {
+        fh_ui::Rows rows;
+        rows.add("QQ 群文本上限",
+                 std::to_string(PlatformMessagePolicyFH::maxTextLength(PlatformKindFH::QQ)) +
+                     " 字符");
+        rows.add("微信群文本上限",
+                 std::to_string(PlatformMessagePolicyFH::maxTextLength(PlatformKindFH::WeChat)) +
+                     " 字符");
+        rows.add("微博群文本上限",
+                 std::to_string(PlatformMessagePolicyFH::maxTextLength(PlatformKindFH::Weibo)) +
+                     " 字符");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[D4] 聊天记录上限与淘汰\n";
+    step("[D4]", "聊天记录上限与淘汰");
     for (int i = 1; i <= 55; ++i) {
         groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ, "1001",
                                 MessageKindFH::TEXT, "seq" + std::to_string(i));
     }
-    std::cout << "     QQ 群 1001 聊天记录数：" << groups.chatOf("1001").size() 
-              << "（上限 " << GroupRegistryFH::kMaxChatRecordsFH << " 条）\n";
+    {
+        fh_ui::Rows rows;
+        rows.add("QQ 群 1001 聊天记录数",
+                 std::to_string(groups.chatOf("1001").size()) + " 条",
+                 "（上限 " + std::to_string(GroupRegistryFH::kMaxChatRecordsFH) + " 条）");
+        rows.flush(std::cout, 5);
+    }
 
-    std::cout << "\n[D5] 消息视图呈现差异\n";
+    step("[D5]", "消息视图呈现差异");
     std::cout << "     QQ 群 1001 聊天记录（QQ 视图）：\n";
     for (const GroupChatRecordFH& r : groups.chatOf("1001"))
         std::cout << "       · " << PlatformMessagePolicyFH::render(
@@ -622,7 +745,7 @@ void runAutoMessageScenario() {
                                         MessageKindFH::TEXT, "20:00:00")
                   << "\n";
     std::cout << "     （视图仅为示意；实际能否发送由 D1/D2 的平台规则决定）\n";
-    std::cout << "======== 阶段 D 自动演示结束 ========\n";
+    std::cout << "\n" << fh_ui::rule("阶段 D 自动演示结束") << "\n";
 }
 
 // 只运行指定阶段，便于答辩时按需演示单段
@@ -651,7 +774,7 @@ void runAllDemoScenarios() {
 // 演示自检汇总：把每处校验的结果与预期对比，给出一个干净的结论
 int printDemoSummary() {
     const int abnormal = g_summary.unexpectedFail + g_summary.unexpectedPass;
-    std::cout << "\n======== 演示自检汇总 ========\n";
+    std::cout << "\n" << fh_ui::rule("演示自检汇总") << "\n";
     std::cout << "  校验项 " << g_summary.total << " 项：成功 " << g_summary.success
               << "，失败 " << g_summary.failure
               << "（其中标注「应失败」的平台规则 / 权限校验 " << g_summary.expectedFail << " 项）\n";

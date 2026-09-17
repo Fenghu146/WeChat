@@ -66,6 +66,7 @@
 #include "im/social/group_registry_fh.hpp"
 
 #include "client_ui.hpp"
+#include "ui_screen.hpp"
 
 namespace {
 
@@ -73,39 +74,17 @@ using ProfilePtr = std::shared_ptr<UserProfileFH>;
 using UserPtr = std::shared_ptr<UserFH>;
 
 // ============================================================
-// 基础 UI 组件：清屏 / 热键 / 分隔线 / 状态行 / 提示条
+// 基础 UI 组件：整帧重绘 / 单键输入 / 状态提示条
+//
+// 重绘统一交给 fh_ui::Screen：它按终端可视高度裁剪、逐行覆盖写，
+// 因此任何界面、任何窗口尺寸下，按任意键都不会再把标题挤出屏幕。
 // ============================================================
-
-void cls() {
-#ifdef _WIN32
-    // 直接调用控制台 API 清屏：此前用 std::system("cls") 每次重绘都会
-    // 创建 cmd.exe 子进程，是界面刷新延迟的主要来源之一。
-    const HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    CONSOLE_SCREEN_BUFFER_INFO csbi{};
-    if (hOut != INVALID_HANDLE_VALUE &&
-        GetConsoleScreenBufferInfo(hOut, &csbi)) {
-        const DWORD cells =
-            static_cast<DWORD>(csbi.dwSize.X) * static_cast<DWORD>(csbi.dwSize.Y);
-        const COORD home{0, 0};
-        DWORD written = 0;
-        FillConsoleOutputCharacterA(hOut, ' ', cells, home, &written);
-        FillConsoleOutputAttribute(hOut, csbi.wAttributes, cells, home, &written);
-        SetConsoleCursorPosition(hOut, home);
-    }
-#else
-    std::cout << "\x1b[2J\x1b[H";
-#endif
-}
 
 void initUiConsole() {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
-}
-
-void uiRule(const std::string& title) {
-    std::cout << "======== " << title << " ========\n";
 }
 
 std::string trimCopy(std::string s) {
@@ -151,7 +130,7 @@ char waitKey() {
     if (hIn == INVALID_HANDLE_VALUE || !GetConsoleMode(hIn, &mode)) {
         // 非交互（管道/重定向/自动化冒烟）时退回标准输入逐字节读取
         char c = 0;
-        if (std::fread(&c, 1, 1, stdin) != 1) return 0;
+        if (std::fread(&c, 1, 1, stdin) != 1) std::exit(0);  // 输入已结束：直接退出
         if (c == '\r' || c == '\n' || c == 27) return 0;
         return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
@@ -165,7 +144,7 @@ char waitKey() {
 #else
     RawTerminalGuard guard;  // 终端下无需回车；管道/重定向下不做改动
     char c = 0;
-    if (std::fread(&c, 1, 1, stdin) != 1) return 0;
+    if (std::fread(&c, 1, 1, stdin) != 1) std::exit(0);  // 输入已结束：直接退出
     if (c == '\r' || c == '\n' || c == 27) return 0;
     return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 #endif
@@ -207,24 +186,50 @@ long askNum(const std::string& prompt, long lo, long hi) {
     }
 }
 
-// 从候选列表选一项：返回 0 起下标，取消返回 -1
-int chooseByLabels(const std::string& prompt,
-                   const std::vector<std::string>& labels) {
-    for (std::size_t i = 0; i < labels.size(); ++i)
-        std::cout << "   [" << (i + 1) << "] " << labels[i] << "\n";
-    std::cout << prompt << " ";
-    if (labels.size() <= 9) {
-        const char k = waitKey();
-        if (k >= '1' && k <= static_cast<char>('0' + labels.size()))
-            return static_cast<int>(k - '1');
-        if (k == '0') return -1;
-        std::cout << "  [提示] 无效选择，请重新进入后重试。\n";
-        return -1;
+// 长帮助页：按终端高度分页，逐页显示，避免一屏放不下时静默丢内容。
+struct HelpEntry {
+    bool isSection;
+    std::string text;
+};
+
+void showPagedHelp(const std::string& title, const std::vector<HelpEntry>& entries) {
+    const fh_ui::TermSize ts = fh_ui::termSize();
+    const int perPage = std::max(3, ts.rows - 4);  // 预留标题栏、状态条与提示行
+
+    // 估算每条占几行（item 会在过宽时自动折行），据此切页
+    std::vector<int> rows;
+    rows.reserve(entries.size());
+    int totalRows = 0;
+    for (const auto& e : entries) {
+        const std::string line =
+            e.isSection ? fh_ui::section(e.text) : ("    · " + e.text);
+        const int width = fh_ui::displayWidth(line);
+        const int span = std::max(1, ts.cols - (e.isSection ? 2 : 6));
+        const int n = width <= ts.cols ? 1 : 1 + (width - ts.cols + span - 1) / span;
+        rows.push_back(n);
+        totalRows += n;
     }
-    const long r = askNum("（输入 1~" + std::to_string(labels.size()) +
-                              "，直接回车取消）> ",
-                          1, static_cast<long>(labels.size()));
-    return r < 0 ? -1 : static_cast<int>(r - 1);
+    const int pages = std::max(1, (totalRows + perPage - 1) / perPage);
+
+    std::size_t i = 0;
+    for (int page = 1; page <= pages && i < entries.size(); ++page) {
+        fh_ui::Screen s(title);
+        int used = 0;
+        for (; i < entries.size(); ++i) {
+            if (used > 0 && used + rows[i] > perPage) break;
+            if (entries[i].isSection)
+                s.section(entries[i].text);
+            else
+                s.item(entries[i].text);
+            used += rows[i];
+        }
+        s.prompt(pages > 1 ? ("第 " + std::to_string(page) + "/" +
+                              std::to_string(pages) + " 页 —— 按任意键" +
+                              (page < pages ? "继续：" : "返回："))
+                           : std::string("按任意键返回："));
+        s.flush();
+        waitKey();
+    }
 }
 
 // 操作过程反馈。
@@ -297,6 +302,52 @@ void noticeOK(const std::string& msg) { g.notice = "[成功] " + msg; }
 void noticeFail(const std::string& msg) { g.notice = "[失败] " + msg; }
 void noticeInfo(const std::string& msg) { g.notice = "[提示] " + msg; }
 
+// 统一帧尾：把最近一次操作结果作为状态条挂在菜单上方，写入提示行后整帧重绘。
+// 所有界面都走这里，格式与「按任意键返回」类提示保持一致。
+void present(fh_ui::Screen& s, const std::string& prompt = "请按键选择：") {
+    if (!g.notice.empty()) s.notice(g.notice);
+    g.notice.clear();
+    s.prompt(prompt);
+    s.flush();
+}
+
+// 列表型子提示：单独成一帧（标题栏 + 编号列表 + 提示行）。
+// 与主界面共用同一套排版，同样受终端高度约束，不会把内容顶出屏幕。
+// 返回 0 起下标；取消 / 无效输入返回 -1。
+int chooseByLabels(const std::string& title,
+                   const std::vector<std::string>& labels,
+                   const std::string& hint = std::string()) {
+    if (labels.empty()) return -1;
+
+    fh_ui::Screen s(title);
+    if (!hint.empty()) {
+        s.text(hint);
+        s.blank();
+    }
+
+    if (labels.size() <= 9) {
+        std::vector<fh_ui::MenuItem> items;
+        items.reserve(labels.size());
+        for (std::size_t i = 0; i < labels.size(); ++i)
+            items.push_back(fh_ui::MenuItem{static_cast<char>('1' + i), labels[i]});
+        s.menu(items, 1);  // 候选项较长，保持一行一个
+        s.prompt("请按键选择（[0] 取消）：");
+        s.flush();
+        const char k = waitKey();
+        if (k >= '1' && k <= static_cast<char>('0' + labels.size()))
+            return static_cast<int>(k - '1');
+        if (k != 0 && k != '0') noticeInfo("无效选择，请重新进入后重试。");
+        return -1;
+    }
+
+    for (std::size_t i = 0; i < labels.size(); ++i)
+        s.text("    [" + std::to_string(i + 1) + "] " + labels[i]);
+    s.prompt("输入序号（直接回车取消）：");
+    s.flush();
+    const long r = askNum("> ", 1, static_cast<long>(labels.size()));
+    return r < 0 ? -1 : static_cast<int>(r - 1);
+}
+
 std::string platCn(PlatformKindFH p) { return toZhName(p); }
 
 const char* zhRole(GroupRoleFH role) { return toZhName(role); }
@@ -356,8 +407,9 @@ std::string friendMark(const ProfilePtr& p, PlatformKindFH pl) {
 // annotate 非空时，在每项后追加状态标注（如「已是QQ好友」「已在群内」）。
 // 同一选择器同时服务「加好友」和「删好友」等相反意图，因此标注状态而非过滤名单：
 // 既避免误操作，也保留「重复添加被拒绝」这类规则的可演示性。
+// title 作为子界面标题栏（如「选择要邀请的人」）。
 ProfilePtr pickProfile(bool excludeSelf, std::optional<PlatformKindFH> needAcct,
-                       const std::string& prompt,
+                       const std::string& title,
                        const std::function<std::string(const ProfilePtr&)>& annotate = {}) {
     std::vector<std::string> labels;
     std::vector<ProfilePtr> hits;
@@ -375,20 +427,20 @@ ProfilePtr pickProfile(bool excludeSelf, std::optional<PlatformKindFH> needAcct,
         noticeFail("没有可选的成员（可能缺少该平台的账号）。");
         return nullptr;
     }
-    const int idx = chooseByLabels(prompt, labels);
+    const int idx = chooseByLabels(title, labels);
     if (idx < 0) return nullptr;
     return hits[static_cast<std::size_t>(idx)];
 }
 
-void drawAccountCard() {
+void drawAccountCard(fh_ui::Screen& s) {
     const auto& p = g.me;
-    std::cout << "  当前账号   " << p->getNickname() << "（QQ/微博 " << p->getQQId()
-              << " · " << p->getLocation() << " · T龄 " << p->tAge(g.year) << " 年）\n";
-    std::cout << "  微信账号   "
-              << (p->hasWeChatAccount() ? p->getWeChatId() : "未绑定") << "\n";
+    s.kv("当前账号", p->getNickname() + "（QQ/微博 " + p->getQQId() + " · " +
+                        p->getLocation() + " · T龄 " +
+                        std::to_string(p->tAge(g.year)) + " 年）");
+    s.kv("微信账号", p->hasWeChatAccount() ? p->getWeChatId() : std::string("未绑定"));
 
     // 三层维度互相独立：是否有账号(身份) → 是否开通(用户自选) → 是否登录(在线)
-    std::cout << "  服务状态   ";
+    std::string states;
     const char* sep = "";
     for (const auto pl :
          {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo}) {
@@ -401,10 +453,10 @@ void drawAccountCard() {
             state = "已开通";
             if (p->isOnline(pl)) state += "·在线";
         }
-        std::cout << sep << platCn(pl) << "[" << state << "]";
+        states += sep + platCn(pl) + "[" + state + "]";
         sep = "   ";
     }
-    std::cout << "\n";
+    s.kv("服务状态", states);
 }
 
 // ============================================================
@@ -513,24 +565,28 @@ std::string manageMemberFailReason(const LocalSlot& slot, const UserPtr& op,
 void runGroupSettings(LocalSlot& live) {
     GroupFH& grp = *live.group;
     for (;;) {
-        cls();
-        std::cout << "\n";
-        uiRule("群设置：" + grp.getName());
         const UserPtr meUser = actorFor(g.me, live.platform);
-        std::cout << "  普通成员可邀请（QQ 概念）："
-                  << (grp.getConfig().isMemberInviteEnabled() ? "开启" : "关闭")
-                  << "    全员禁言："
-                  << (grp.getConfig().isAllMuted() ? "开启" : "关闭") << "\n";
-        std::cout << "  撤回时间窗："
-                  << grp.getConfig().getRecallTimeLimit().count()
-                  << " 秒    人数上限：" << grp.getConfig().getMaxMembers() << "\n";
-        std::cout << "  说明：微信群没有“普通成员可邀请”开关——微信群仅群主可推荐加入。\n";
-        std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]切换“普通成员可邀请”开关  [2]修改撤回时间窗  [0]返回\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "  请按键选择：";
+
+        fh_ui::Screen s("群设置：" + grp.getName());
+        drawAccountCard(s);
+        s.blank();
+        s.section("本群配置");
+        s.kv("普通成员可邀请", grp.getConfig().isMemberInviteEnabled()
+                                   ? std::string("开启（QQ 概念）")
+                                   : std::string("关闭（QQ 概念）"));
+        s.kv("全员禁言", grp.getConfig().isAllMuted() ? "开启" : "关闭");
+        s.kv("撤回时间窗",
+             std::to_string(grp.getConfig().getRecallTimeLimit().count()) + " 秒");
+        s.kv("人数上限", std::to_string(grp.getConfig().getMaxMembers()) + " 人");
+        s.text("  说明：微信群没有“普通成员可邀请”开关——微信群仅群主可推荐加入。");
+        s.blank();
+        s.section("可改配置");
+        s.menu({{'1', "切换“普通成员可邀请”开关"},
+                {'2', "修改撤回时间窗"},
+                {'0', "返回"}});
+        present(s);
         const char k = waitKey();
+
         if (k == '0') return;
         if (!meUser) {
             noticeFail("你缺少该平台账号，无法变更群设置。");
@@ -592,7 +648,8 @@ bool switchActorInGroup(const LocalSlot& live) {
         noticeFail("群内没有其他可切换的演示账号（可先邀请成员入群）。");
         return false;
     }
-    const int idx = chooseByLabels("  选择要以谁的身份操作> ", labels);
+    const int idx = chooseByLabels("以群内其他成员身份操作", labels,
+                                   "  选择后，后续操作将以该成员的身份执行。");
     if (idx < 0) return false;
     g.me = hits[static_cast<std::size_t>(idx)];
     noticeOK("已切换操作身份为 " + g.me->getNickname() +
@@ -605,36 +662,43 @@ bool switchActorInGroup(const LocalSlot& live) {
 bool runLocalMore(LocalSlot& live) {
     GroupFH& grp = *live.group;
     for (;;) {
-        cls();
-        std::cout << "\n";
-        uiRule("更多操作：" + grp.getName() +
-               "（" + platCn(live.platform) + " 管理模式）");
         const UserPtr meUser = actorFor(g.me, live.platform);
-        std::cout << "  我的身份："
-                  << (meUser ? localRoleName(live, meUser) : std::string("非成员"))
-                  << "    成员数：" << grp.members().size() << "\n";
-        std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]切换管理模式  [2]转让群主  [3]解散群  [4]退出本群\n";
-        std::cout << "  [5]群设置（邀请开关/撤回窗口）  [6]以其他成员身份操作\n";
-        std::cout << "  [7]本页操作帮助  [8]返回会话列表  [0]返回会话\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "  请按键选择：";
+
+        fh_ui::Screen s("更多操作：" + grp.getName() + "（" +
+                        platCn(live.platform) + " 管理模式）");
+        s.kv("我的身份",
+             meUser ? localRoleName(live, meUser) : std::string("非成员"));
+        s.kv("成员数", std::to_string(grp.members().size()) + " 人");
+        s.kv("群状态", grp.isDisbanded() ? "已解散（仅可返回）" : "正常");
+        s.blank();
+        s.section("可用操作");
+        s.menu({{'1', "切换管理模式"},
+                {'2', "转让群主"},
+                {'3', "解散群"},
+                {'4', "退出本群"},
+                {'5', "群设置（邀请开关/撤回窗口）"},
+                {'6', "以其他成员身份操作"},
+                {'7', "本页操作帮助"},
+                {'8', "返回会话列表"},
+                {'0', "返回会话"}});
+        present(s);
         const char k = waitKey();
 
         if (k == '0') return true;
         if (k == '8') return false;
         if (k == '7') {
-            cls();
-            uiRule("更多操作 · 说明（阶段 A / 平台差异）");
-            std::cout << "  切换管理模式：群成员与消息数据原样保留，仅换绑群策略\n"
-                         "                （任务书 6.(4)：动态变换管理特色，数据不受伤害）\n"
-                         "  转让群主    ：仅群主，原群主降为普通成员（角色属于群成员关系）\n"
-                         "  解散群      ：仅群主，解散后成员清空、所有操作被拒绝\n"
-                         "  退出本群    ：普通成员/管理员主动退群；群主须先转让或解散\n"
-                         "  群设置      ：邀请开关（QQ 概念）与撤回时间窗，需管理员及以上\n"
-                         "  切换身份    ：以群内其他成员身份操作，便于验证权限差异\n"
-                         "  按任意键返回：";
+            fh_ui::Screen h("更多操作 · 说明（阶段 A / 平台差异）");
+            h.section("各操作的含义");
+            h.kv("切换管理模式",
+                 "群成员与消息数据原样保留，仅换绑群策略（任务书 6.(4)：动态变换"
+                 "管理特色，数据不受伤害）");
+            h.kv("转让群主", "仅群主可操作，原群主降为普通成员（角色属于群成员关系）");
+            h.kv("解散群", "仅群主可操作；解散后成员清空、所有操作被拒绝");
+            h.kv("退出本群", "普通成员/管理员主动退群；群主须先转让或解散");
+            h.kv("群设置", "邀请开关（QQ 概念）与撤回时间窗，需管理员及以上身份");
+            h.kv("切换身份", "以群内其他成员身份操作，便于验证不同角色的权限差异");
+            h.prompt("按任意键返回：");
+            h.flush();
             waitKey();
             continue;
         }
@@ -674,7 +738,7 @@ bool runLocalMore(LocalSlot& live) {
                                  u->getNickname() + "(" + u->getId() + ")");
                 list.push_back(u);
             }
-            const int idx = chooseByLabels("  选择群主接班人> ", labels);
+            const int idx = chooseByLabels("选择群主接班人", labels);
             if (idx < 0) continue;
             const UserPtr& target = list[static_cast<std::size_t>(idx)];
             busy("群主转让");
@@ -743,59 +807,82 @@ void runLocalChat(const LocalSlot& slot) {
     for (;;) {
         // 每轮重算“我”：切换操作身份或切换管理模式后即时生效
         const UserPtr meUser = actorFor(sess.me, live.platform);
-        cls();
-        std::cout << "\n";
-        uiRule("正式群会话：" + g.getName() +
-               "（" + platCn(live.platform) + " 管理模式）");
-        std::cout << "  群号：" << g.getGroupNumber() << "  群标识：" << g.getId()
-                  << "  上限：" << g.getConfig().getMaxMembers()
-                  << "  撤回窗口：" << g.getConfig().getRecallTimeLimit().count()
-                  << " 秒\n";
-        std::cout << "  全员禁言：" << (g.getConfig().isAllMuted() ? "开启" : "关闭");
-        if (!g.getAnnouncement().empty())
-            std::cout << "  群公告：" << g.getAnnouncement();
-        std::cout << "\n";
+        const auto& msgs = g.messages();
+
+        fh_ui::Screen s("正式群会话：" + g.getName() + "（" +
+                        platCn(live.platform) + " 管理模式）");
+        s.kv("群号", std::to_string(g.getGroupNumber()) + "（" + g.getId() + "）");
+        s.kv("人数上限", std::to_string(g.getConfig().getMaxMembers()) + " 人");
+        s.kv("撤回窗口",
+             std::to_string(g.getConfig().getRecallTimeLimit().count()) + " 秒");
+        s.kv("全员禁言", g.getConfig().isAllMuted() ? "开启" : "关闭");
+        s.kv("我的身份", std::string(localRoleName(live, meUser)) +
+                             (meUser && g.isMuted(meUser) ? "（你被禁言）" : ""));
+        if (!g.getAnnouncement().empty()) s.kv("群公告", g.getAnnouncement());
+
         if (g.isDisbanded()) {
-            std::cout << "  >> 本群已解散，成员已清空，仅可返回。\n";
-            std::cout << "  [0]返回会话列表\n";
+            s.blank();
+            s.text("  >> 本群已解散，成员已清空，仅可返回。");
+            s.blank();
+            s.section("可用操作");
+            s.menu({{'0', "返回会话列表"}});
+            present(s);
             const char k = waitKey();
             if (k == '0') return;
             continue;
         }
-        std::cout << "  我的身份：" << localRoleName(live, meUser);
-        if (meUser && g.isMuted(meUser)) std::cout << " ［你被禁言］";
-        std::cout << "\n";
 
-        // —— 成员面板（数据展示区 1）——
-        std::cout << "  —— 成员 " << g.members().size() << "/"
-                  << g.getConfig().getMaxMembers() << " ——\n";
-        for (const auto& u : sortedMembers(g))
-            std::cout << "    " << memberLine(g, u) << "\n";
+        // —— 成员面板与消息面板共享剩余高度：窗口放不下时逐条裁剪并提示 ——
+        const auto members = sortedMembers(g);
+        const int tailRows = 8;  // 预留：菜单 + 分节标题 + 状态条 + 提示行
+        int budget = s.rowsLeft() - tailRows;
+        if (budget < 2) budget = 2;
 
-        // —— 消息面板（数据展示区 2）——
-        std::cout << "  —— 消息记录 " << g.messages().size() << " 条 ——\n";
-        const auto& msgs = g.messages();
-        const std::size_t begin = msgs.size() > 20 ? msgs.size() - 20 : 0;
+        s.blank();
+        s.section("成员 " + std::to_string(members.size()) + "/" +
+                  std::to_string(g.getConfig().getMaxMembers()));
+        const int memberRows =
+            std::min<int>(static_cast<int>(members.size()), std::max(1, budget / 2));
+        for (int i = 0; i < memberRows; ++i)
+            s.item(memberLine(g, members[static_cast<std::size_t>(i)]));
+        if (static_cast<int>(members.size()) > memberRows)
+            s.text("    …… 还有 " +
+                   std::to_string(members.size() - static_cast<std::size_t>(memberRows)) +
+                   " 位成员未显示（放大窗口后可看全）");
+
+        s.blank();
+        s.section("消息记录 " + std::to_string(msgs.size()) + " 条");
+        const int msgRows = std::min<int>(static_cast<int>(msgs.size()),
+                                          std::max(1, budget - memberRows));
+        const std::size_t begin =
+            msgs.size() > static_cast<std::size_t>(msgRows)
+                ? msgs.size() - static_cast<std::size_t>(msgRows)
+                : 0;
+        if (msgs.empty()) s.item("（暂无消息）");
+        if (begin > 0)
+            s.text("    …… 更早的 " + std::to_string(begin) + " 条未显示");
         for (std::size_t i = begin; i < msgs.size(); ++i) {
             const auto& m = msgs[i];
-            std::cout << "    [" << fmtClock(m->getSentAt()) << "] "
-                      << m->getSender()->getNickname() << "：" << m->getContent()
-                      << (m->isRecalled() ? " ［已撤回］" : "") << "\n";
+            s.item("[" + fmtClock(m->getSentAt()) + "] " +
+                   m->getSender()->getNickname() + "：" + m->getContent() +
+                   (m->isRecalled() ? "  ［已撤回］" : ""));
         }
 
         // —— 操作按钮区：数字键为功能键，0 进入“更多操作” ——
-        std::cout << "  ------------------------------------------------------------------\n";
+        s.blank();
+        s.section("可用操作");
         if (!meUser) {
-            std::cout << "  [提示] 当前管理模式为「" << platCn(live.platform)
-                      << "」，但你没有该平台账号，仅可浏览本群。\n";
-            std::cout << "  [0]更多操作（含返回会话列表）\n";
+            s.text("  提示：当前管理模式为「" + platCn(live.platform) +
+                   "」，但你没有该平台账号，仅可浏览本群。");
+            s.menu({{'0', "更多操作（含返回会话列表）"}});
         } else {
-            std::cout << "  [1]发送消息  [2]撤回消息  [3]邀请成员  [4]踢出成员  [5]禁言/解禁\n";
-            std::cout << "  [6]全员禁言  [7]任命管理员 [8]群公告    [9]改群名   [0]更多操作\n";
+            s.menu({{'1', "发送消息"}, {'2', "撤回消息"}, {'3', "邀请成员"},
+                    {'4', "踢出成员"}, {'5', "禁言/解禁"}, {'6', "全员禁言"},
+                    {'7', "任命管理员"}, {'8', "群公告"}, {'9', "改群名"},
+                    {'0', "更多操作"}},
+                   5);  // 每行 5 项，与原版一致
         }
-        std::cout << "  " << sess.notice << "\n";
-        sess.notice.clear();
-        std::cout << "  请按键选择：";
+        present(s);
         const char k = waitKey();
         if (!meUser) {  // 无账号时只保留“更多操作”（其中含返回会话列表）
             if (k == '0') {
@@ -829,18 +916,20 @@ void runLocalChat(const LocalSlot& slot) {
             }
             const std::size_t n = std::min<std::size_t>(10, msgs.size());
             const std::size_t from = msgs.size() - n;
-            std::cout << "  最近 " << n << " 条消息：\n";
+            fh_ui::Screen pick("撤回消息：选择要撤回的那一条");
+            pick.section("最近 " + std::to_string(n) + " 条");
             for (std::size_t i = 0; i < n; ++i) {
                 const auto& m = msgs[from + i];
-                std::cout << "   [" << (i + 1) << "] [" << fmtClock(m->getSentAt())
-                          << "] " << m->getSender()->getNickname() << "："
-                          << m->getContent()
-                          << (m->isRecalled() ? " ［已撤回］" : "") << "\n";
+                pick.item("[" + std::to_string(i + 1) + "] [" +
+                          fmtClock(m->getSentAt()) + "] " +
+                          m->getSender()->getNickname() + "：" + m->getContent() +
+                          (m->isRecalled() ? "  ［已撤回］" : ""));
             }
-            const long sel =
-                askNum("  输入要撤回的消息序号（1~" + std::to_string(n) +
-                           "，直接回车取消）> ",
-                       1, static_cast<long>(n));
+            pick.blank();
+            pick.prompt("输入要撤回的消息序号（1~" + std::to_string(n) +
+                        "，直接回车取消）：");
+            pick.flush();
+            const long sel = askNum("> ", 1, static_cast<long>(n));
             if (sel < 0) {
                 noticeInfo("已取消撤回");
                 continue;
@@ -856,7 +945,7 @@ void runLocalChat(const LocalSlot& slot) {
         case '3': {  // 邀请成员（只能邀请拥有本平台账号的人）
             const auto target = pickProfile(
                 /*excludeSelf=*/true, live.platform,
-                "  选择要邀请的人（" + platCn(live.platform) + " 账号）> ",
+                "选择要邀请的人（" + platCn(live.platform) + " 账号）",
                 [&live](const ProfilePtr& p) -> std::string {
                     const auto u = actorFor(p, live.platform);
                     if (!u) return std::string();
@@ -882,7 +971,7 @@ void runLocalChat(const LocalSlot& slot) {
                                  u->getNickname() + "(" + u->getId() + ")");
                 list.push_back(u);
             }
-            const int idx = chooseByLabels("  选择要踢出的成员> ", labels);
+            const int idx = chooseByLabels("选择要踢出的成员", labels);
             if (idx < 0) continue;
             const UserPtr& target = list[static_cast<std::size_t>(idx)];
             busy("成员移除");
@@ -905,7 +994,8 @@ void runLocalChat(const LocalSlot& slot) {
                 list.push_back(u);
             }
             const int idx = chooseByLabels(
-                "  选择要禁言/解除禁言的成员（选中后自动取反）> ", labels);
+                "选择要禁言/解除禁言的成员",
+                labels, "  选中后自动取反：已禁言 → 解禁，未禁言 → 禁言。");
             if (idx < 0) continue;
             const UserPtr& target = list[static_cast<std::size_t>(idx)];
             const bool wantMute = !g.isMuted(target);
@@ -948,8 +1038,8 @@ void runLocalChat(const LocalSlot& slot) {
                 list.push_back(u);
             }
             const int idx = chooseByLabels(
-                "  选择目标成员（管理员点选即撤销，普通成员点选即任命）> ",
-                labels);
+                "任命 / 撤销管理员",
+                labels, "  管理员点选即撤销，普通成员点选即任命。");
             if (idx < 0) continue;
             const UserPtr& target = list[static_cast<std::size_t>(idx)];
             const bool makeAdmin = g.getRole(target) != GroupRoleFH::ADMIN;
@@ -1053,45 +1143,62 @@ void runOfficialChat(const std::string& groupId) {
             for (const auto& id : info->memberIds)
                 if (id == myId) inGroup = true;
 
-        cls();
-        std::cout << "\n";
-        uiRule("群聊天：" + info->name + "（" + platCn(pl) + " 官方/自建群）");
-        std::cout << "  群号：" << info->groupId << "  容量：" << info->maxMembers
-                  << "  当前成员：" << info->memberIds.size() << "\n";
-        std::cout << "  群主：" << (info->ownerId.empty()
-                                        ? "(官方预置群)"
-                                        : nickOf(pl, info->ownerId))
-                  << "  我：" << (inGroup ? "已在群内" : "未加入") << "\n";
+        fh_ui::Screen s("群聊天：" + info->name + "（" + platCn(pl) +
+                        " 官方/自建群）");
+        s.kv("群号", info->groupId);
+        s.kv("成员", std::to_string(info->memberIds.size()) + "/" +
+                        std::to_string(info->maxMembers) + " 人");
+        s.kv("群主", info->ownerId.empty() ? std::string("（官方预置群）")
+                                           : nickOf(pl, info->ownerId));
+        s.kv("我的状态", inGroup ? "已在群内" : "未加入");
         if (!hasAcct)
-            std::cout << "  [注意] 你缺少该平台的账号，需先到【账号中心】处理。\n";
+            s.text("  注意：你缺少该平台的账号，需先到【账号中心】处理。");
+
+        const auto& chat = info->chat;
+        const int tailRows = 5;
+        int budget = s.rowsLeft() - tailRows;
+        if (budget < 2) budget = 2;
 
         // —— 成员面板 ——
-        std::cout << "  —— 群成员 ——\n";
-        if (info->memberIds.empty())
-            std::cout << "    (空)\n";
-        for (std::size_t i = 0; i < info->memberIds.size(); ++i)
-            std::cout << "    " << (i + 1) << ". "
-                      << nickOf(pl, info->memberIds[i]) << "\n";
+        s.blank();
+        s.section("群成员 " + std::to_string(info->memberIds.size()) + " 人");
+        if (info->memberIds.empty()) s.item("（空）");
+        const int memberRows = std::min<int>(
+            static_cast<int>(info->memberIds.size()), std::max(1, budget / 2));
+        for (int i = 0; i < memberRows; ++i)
+            s.item(nickOf(pl, info->memberIds[static_cast<std::size_t>(i)]));
+        if (static_cast<int>(info->memberIds.size()) > memberRows)
+            s.text("    …… 还有 " +
+                   std::to_string(info->memberIds.size() -
+                                  static_cast<std::size_t>(memberRows)) +
+                   " 人未显示");
 
         // —— 群消息记录（按该产品视图渲染，阶段 D）——
-        std::cout << "  —— 聊天记录（" << platCn(pl)
-                  << " 视图渲染，" << info->chat.size() << " 条）——\n";
-        const auto& chat = info->chat;
-        const std::size_t begin = chat.size() > 20 ? chat.size() - 20 : 0;
+        s.blank();
+        s.section("聊天记录（" + platCn(pl) + " 视图渲染，" +
+                  std::to_string(chat.size()) + " 条）");
+        const int msgRows = std::min<int>(static_cast<int>(chat.size()),
+                                          std::max(1, budget - memberRows));
+        const std::size_t begin =
+            chat.size() > static_cast<std::size_t>(msgRows)
+                ? chat.size() - static_cast<std::size_t>(msgRows)
+                : 0;
+        if (chat.empty()) s.item("（暂无记录）");
+        if (begin > 0)
+            s.text("    …… 更早的 " + std::to_string(begin) + " 条未显示");
         for (std::size_t i = begin; i < chat.size(); ++i) {
             const auto& r = chat[i];
-            std::cout << "    · "
-                      << PlatformMessagePolicyFH::render(
-                             pl, r.senderNick, r.content, r.kind,
-                             fmtClock(r.sentAt))
-                      << (r.isReply ? "（引用回复）" : "") << "\n";
+            s.item(PlatformMessagePolicyFH::render(pl, r.senderNick, r.content,
+                                                   r.kind, fmtClock(r.sentAt)) +
+                   (r.isReply ? "（引用回复）" : ""));
         }
 
-        std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]发送消息  [2]加入本群  [3]退出本群  [0]返回\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "  请按键选择：";
+        s.blank();
+        s.section("可用操作");
+        s.menu({{'1', "发送消息"}, {'2', "加入本群"}, {'3', "退出本群"},
+                {'0', "返回"}},
+               4);  // 保持一行，与原版一致
+        present(s);
         const char k = waitKey();
 
         switch (k) {
@@ -1100,9 +1207,14 @@ void runOfficialChat(const std::string& groupId) {
                 noticeFail("尚未加入本群，请先按 [2] 加入。");
                 continue;
             }
-            std::cout << "  消息类型：\n"
-                         "   [1]文本  [2]图片  [3]文件  [4]语音  [5]表情  [0]取消\n"
-                         "  请选择：";
+            {
+                fh_ui::Screen kind("发送消息：选择消息类型");
+                kind.menu({{'1', "文本"}, {'2', "图片"}, {'3', "文件"},
+                           {'4', "语音"}, {'5', "表情"}, {'0', "取消"}},
+                          6);  // 保持一行，与原版一致
+                kind.prompt("请按键选择：");
+                kind.flush();
+            }
             const char tk = waitKey();
             MessageKindFH kind = MessageKindFH::TEXT;
             std::string kindName;
@@ -1119,18 +1231,19 @@ void runOfficialChat(const std::string& groupId) {
                 kind == MessageKindFH::IMAGE || kind == MessageKindFH::DOCUMENT
                     ? "（如图片名/文件名）"
                     : "";
-            auto text = askText("  输入" + kindName + "消息" + what +
-                                "内容（直接回车取消）> ");
+            s.prompt("输入" + kindName + "消息" + what + "内容（直接回车取消）：");
+            s.flush();
+            auto text = askText("");
             if (!text) {
                 noticeInfo("已取消发送");
                 continue;
             }
-            const bool wantReply =
-                kind == MessageKindFH::TEXT &&
-                [&] {
-                    std::cout << "  作为引用回复发送？[y]是 / [n]否：";
-                    return waitKey() == 'y';
-                }();
+            bool wantReply = false;
+            if (kind == MessageKindFH::TEXT) {
+                s.prompt("作为引用回复发送？[y]是 / [n]否：");
+                s.flush();
+                wantReply = waitKey() == 'y';
+            }
             busy("消息发送");
             const std::string reason =
                 officialSendReason(info, g.me, kind, *text, wantReply);
@@ -1190,35 +1303,49 @@ void runDiscChat(std::size_t index) {
             return;
         }
         const bool disbanded = disc->isDisbanded();
-        cls();
-        std::cout << "\n";
-        uiRule("QQ 临时讨论组：" + disc->getName());
-        std::cout << "  组标识：" << disc->getId()
-                  << "  发起人：" << nickOf(PlatformKindFH::QQ,
-                                             disc->getCreatorId())
-                  << "  人数：" << disc->size() << "/" << disc->capacity()
-                  << (disbanded ? "  ［已解散］" : "") << "\n";
-        std::cout << "  —— 成员 ——\n";
+
+        fh_ui::Screen s("QQ 临时讨论组：" + disc->getName());
+        s.kv("组标识", disc->getId());
+        s.kv("发起人", nickOf(PlatformKindFH::QQ, disc->getCreatorId()));
+        s.kv("人数", std::to_string(disc->size()) + "/" +
+                        std::to_string(disc->capacity()) + " 人");
+        s.kv("状态", disbanded ? "已解散（成员已清空）" : "正常");
+
         if (disbanded) {
-            std::cout << "    (已解散，成员已清空)\n";
-            std::cout << "  [0]返回\n";
+            s.blank();
+            s.section("可用操作");
+            s.menu({{'0', "返回"}});
+            present(s);
             if (waitKey() == '0') return;
             continue;
         }
-        for (const auto& id : disc->memberIds())
-            std::cout << "    · " << nickOf(PlatformKindFH::QQ, id) << "\n";
 
-        std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]邀请成员  [2]退出讨论组  [3]解散（仅发起人）  [0]返回\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "  请按键选择：";
+        const auto& ids = disc->memberIds();
+        s.blank();
+        s.section("成员 " + std::to_string(ids.size()) + " 人");
+        const int budget = std::max(1, s.rowsLeft() - 5);
+        const int shown = std::min<int>(static_cast<int>(ids.size()), budget);
+        for (int i = 0; i < shown; ++i)
+            s.item(nickOf(PlatformKindFH::QQ, ids[static_cast<std::size_t>(i)]));
+        if (static_cast<int>(ids.size()) > shown)
+            s.text("    …… 还有 " +
+                   std::to_string(ids.size() - static_cast<std::size_t>(shown)) +
+                   " 人未显示");
+
+        s.blank();
+        s.section("可用操作");
+        s.menu({{'1', "邀请成员"},
+                {'2', "退出讨论组"},
+                {'3', "解散讨论组（仅发起人）"},
+                {'0', "返回"}},
+               4);  // 保持一行，与原版一致
+        present(s);
         const char k = waitKey();
         switch (k) {
         case '1': {
             const auto target = pickProfile(
                 /*excludeSelf=*/true, PlatformKindFH::QQ,
-                "  选择要邀请的人（QQ 账号）> ",
+                "选择要邀请的人（QQ 账号）",
                 [&disc](const ProfilePtr& p) -> std::string {
                     return disc->contains(p->getQQId()) ? std::string("  ［已在组内］")
                                                         : std::string("  ［不在组内］");
@@ -1326,22 +1453,22 @@ void runConversationList() {
                                      std::to_string(d->size()) + " 人）"});
     }
 
-    cls();
-    uiRule("我的会话列表");
     if (items.empty()) {
-        std::cout << "  还没有可进入的会话。\n"
-                     "  可以：到【官方群大厅】加入一个官方群；\n"
-                     "        或到【创建】里新建一个正式群/讨论组。\n";
-        std::cout << "  按任意键返回主界面：";
+        fh_ui::Screen s("我的会话列表");
+        s.text("  还没有可进入的会话。可以：");
+        s.item("到【官方群大厅】加入一个官方群");
+        s.item("或到【创建】里新建一个正式群 / 讨论组");
+        present(s, "按任意键返回主界面：");
         waitKey();
         return;
     }
-    std::cout << "  体系说明：正式群 = 聚合根 GroupFH（群号 9000+，具备完整群管理与\n"
-                 "            策略切换）；官方/自建群 = 群注册表（群号 1001~1006/1007+，\n"
-                 "            承载消息类型差异）；讨论组 = QQ 临时讨论组（容量小、全员可邀请）。\n";
     std::vector<std::string> labels;
     for (const auto& it : items) labels.push_back(it.label);
-    const int sel = chooseByLabels("  选择要进入的会话> ", labels);
+    const int sel = chooseByLabels(
+        "选择要进入的会话", labels,
+        "  体系说明：正式群 = 聚合根 GroupFH（群号 9000+，具备完整群管理与策略切换）；"
+        "官方/自建群 = 群注册表（群号 1001~1006 / 1007+，承载消息类型差异）；"
+        "讨论组 = QQ 临时讨论组（容量小、全员可邀请）。");
     if (sel < 0) return;
     const auto& it = items[static_cast<std::size_t>(sel)];
     openConversation(it.kind, it.key);
@@ -1353,8 +1480,12 @@ void runConversationList() {
 
 // 在大厅创建“官方自建群”（群注册表体系，群号自动从 1007 起分配）
 void createOfficialGroupInHall() {
-    std::cout << "  请选择新群所在平台：\n"
-                 "   [1]QQ  [2]微信  [3]微博  [0]取消\n";
+    {
+        fh_ui::Screen s("创建群：选择平台");
+        s.menu({{'1', "QQ"}, {'2', "微信"}, {'3', "微博"}, {'0', "取消"}}, 4);
+        s.prompt("请按键选择：");
+        s.flush();
+    }
     const char pk = waitKey();
     PlatformKindFH pl;
     if (pk == '1')
@@ -1372,7 +1503,11 @@ void createOfficialGroupInHall() {
                    "（微信群需先绑定微信号）。");
         return;
     }
-    auto name = askText("  新群名称（直接回车取消）> ");
+    fh_ui::Screen s("创建群：填写群名称");
+    s.kv("平台", platCn(pl));
+    s.prompt("新群名称（直接回车取消）：");
+    s.flush();
+    auto name = askText("");
     if (!name) {
         noticeInfo("已取消建群");
         return;
@@ -1390,12 +1525,14 @@ void createOfficialGroupInHall() {
 
 void runHall() {
     for (;;) {
-        cls();
-        uiRule("群大厅（官方预置 QQ 1001~1002 / 微信 1003~1004 / 微博 1005~1006，自建群从 1007 起）");
-        std::cout << "  说明：本大厅属“群注册表”体系（官方预置 + 自建官方群）；\n"
-                     "        【创建】里的本地正式群属“聚合根”体系（群号 9000+，完整群管理）。\n";
+        fh_ui::Screen s("群大厅 · 官方预置群与自建群");
+        s.kv("预置群号", "QQ 1001~1002 / 微信 1003~1004 / 微博 1005~1006");
+        s.kv("自建群号", "从 1007 起自动分配");
+        s.text("  本大厅属“群注册表”体系；【创建】里的本地正式群属“聚合根”体系"
+               "（群号 9000+，具备完整群管理）。");
         const auto& groups = g.official;
         std::vector<std::string> labels;
+        std::vector<fh_ui::MenuItem> groupItems;
         std::vector<const GroupInfoFH*> hits;
         for (const auto pl :
              {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo}) {
@@ -1405,27 +1542,29 @@ void runHall() {
                 if (!myId.empty())
                     for (const auto& id : gi->memberIds)
                         if (id == myId) joined = true;
-                labels.push_back("[" + platCn(pl) + " 群号 " + gi->groupId +
-                                 "] " + gi->name +
-                                 (gi->predefined ? "（官方）" : "（自建）") +
-                                 " 成员 " +
-                                 std::to_string(gi->memberIds.size()) + "/" +
-                                 std::to_string(gi->maxMembers) +
-                                 (joined ? "  ［我已加入］" : ""));
+                const std::string label =
+                    "[" + platCn(pl) + " 群号 " + gi->groupId + "] " + gi->name +
+                    (gi->predefined ? "（官方）" : "（自建）") + " 成员 " +
+                    std::to_string(gi->memberIds.size()) + "/" +
+                    std::to_string(gi->maxMembers) +
+                    (joined ? "  ［我已加入］" : "");
+                labels.push_back(label);
+                groupItems.push_back(fh_ui::MenuItem{
+                    static_cast<char>('1' + static_cast<int>(labels.size()) - 1), label});
                 hits.push_back(gi);
             }
         }
-        for (std::size_t i = 0; i < labels.size(); ++i)
-            std::cout << "   [" << (i + 1) << "] " << labels[i] << "\n";
-        const std::size_t createKey = labels.size() + 1;  // 动态编号，避免与群序号冲突
-        std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [" << createKey
-                  << "]创建群（官方群注册表，群号自动分配）  [0]返回\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
+        // 动态编号：群序号 1..n，建群键 n+1，避免与群序号冲突
+        const std::size_t createKey = labels.size() + 1;
+        s.blank();
+        s.section("可选群（" + std::to_string(labels.size()) + " 个）");
 
         if (labels.size() <= 8) {
-            std::cout << "  请选择群序号进入聊天，或按 " << createKey << " 建群：";
+            s.menu(groupItems, 1);  // 群标签较长，保持一行一个（与原版一致）
+            s.menu({{static_cast<char>('0' + createKey), "创建群（群号自动分配）"},
+                    {'0', "返回"}},
+                   2);
+            present(s, "请按键选择：");
             const char k = waitKey();
             if (k == '0') return;
             if (static_cast<std::size_t>(k - '0') == createKey) {
@@ -1439,10 +1578,12 @@ void runHall() {
             if (k != 0) noticeFail("无效按键：" + std::string(1, k));
             continue;
         }
-        const long sel = askNum("  输入群序号（1~" + std::to_string(labels.size()) +
-                                    "，或 " + std::to_string(createKey) +
-                                    " 建群；直接回车返回）> ",
-                                1, static_cast<long>(createKey));
+
+        for (std::size_t i = 0; i < labels.size(); ++i)
+            s.text("    [" + std::to_string(i + 1) + "] " + labels[i]);
+        s.text("    [" + std::to_string(createKey) + "] 创建群（群号自动分配）");
+        present(s, "输入群序号（直接回车返回）：");
+        const long sel = askNum("> ", 1, static_cast<long>(createKey));
         if (sel < 0) return;
         if (static_cast<std::size_t>(sel) == createKey) {
             createOfficialGroupInHall();
@@ -1457,9 +1598,12 @@ void runHall() {
 // ============================================================
 
 std::optional<PlatformKindFH> askPlatformService() {
-    std::cout << "  选择服务：\n"
-                 "   [1]QQ  [2]微信  [3]微博  [0]取消\n"
-                 "  请选择：";
+    {
+        fh_ui::Screen s("选择服务");
+        s.menu({{'1', "QQ"}, {'2', "微信"}, {'3', "微博"}, {'0', "取消"}}, 4);
+        s.prompt("请按键选择：");
+        s.flush();
+    }
     const char k = waitKey();
     switch (k) {
         case '1': return PlatformKindFH::QQ;
@@ -1471,22 +1615,22 @@ std::optional<PlatformKindFH> askPlatformService() {
 
 void runServiceCenter() {
     for (;;) {
-        cls();
-        uiRule("账号中心（阶段 B · 多产品体系）");
-        std::cout << "\n";
-        drawAccountCard();
+        fh_ui::Screen s("账号中心（阶段 B · 多产品体系）");
+        drawAccountCard(s);
 
-        // 平台规则小字提示
-        std::cout << "  平台规则：QQ/微博共享号码，微信独立号码可绑定 QQ；开通后才能登录；\n"
-                     "            任一服务登录后其余已开通服务自动登录。\n"
-                     "  状态口径：有账号 → 已开通（自选启用）→ 在线；三者独立，绑定微信号 ≠ 已开通微信。\n"
-                     "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]开通服务  [2]取消开通  [3]绑定微信号\n"
-                     "  [4]登录服务  [5]退出单服务 [6]退出全部\n"
-                     "  [0]返回\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "  请按键选择：";
+        s.blank();
+        s.section("平台规则");
+        s.item("QQ/微博共享号码；微信独立号码可绑定 QQ；开通后才能登录");
+        s.item("任一服务登录后，其余已开通服务自动登录");
+        s.item("状态口径：有账号 → 已开通（自选启用）→ 在线；三者互相独立，"
+               "绑定微信号 ≠ 已开通微信");
+
+        s.blank();
+        s.section("可用操作");
+        s.menu({{'1', "开通服务"}, {'2', "取消开通"}, {'3', "绑定微信号"},
+                {'4', "登录服务"}, {'5', "退出单服务"}, {'6', "退出全部"},
+                {'0', "返回"}});
+        present(s);
         const char k = waitKey();
         switch (k) {
         case '1': {
@@ -1524,7 +1668,9 @@ void runServiceCenter() {
                            "，每人只能绑定一个。");
                 continue;
             }
-            auto wid = askText("  输入要绑定的微信号（直接回车取消）> ");
+            s.prompt("输入要绑定的微信号（直接回车取消）：");
+            s.flush();
+            auto wid = askText("");
             if (!wid) { noticeInfo("已取消绑定"); continue; }
             busy("绑定处理");
             if (g.registry.bindWeChat(g.me, *wid))
@@ -1580,7 +1726,8 @@ void runServiceCenter() {
 // 阶段 C：通讯录 —— QQ/微信双向好友 + 微博单向关注
 // ============================================================
 
-void drawFriendLists() {
+// 三个好友列表共享一个行预算：窗口放不下时按列表顺序裁剪，并在末尾提示剩余条数。
+void drawFriendLists(fh_ui::Screen& s, int budget) {
     const auto& p = g.me;
     auto findProfile = [](PlatformKindFH pl,
                           const std::string& id) -> ProfilePtr {
@@ -1588,41 +1735,64 @@ void drawFriendLists() {
             if (q->platformAccountId(pl) == id) return q;
         return nullptr;
     };
-    auto showList = [&](const std::string& title, PlatformKindFH pl,
-                        const std::vector<std::string>& ids) {
-        std::cout << "  —— " << title << "（" << ids.size() << "）——\n";
-        if (ids.empty()) std::cout << "    (空)\n";
-        for (const auto& id : ids) {
-            std::string line = "    · " + nickOf(pl, id);
-            if (ProfilePtr q = findProfile(pl, id)) {
-                const std::string rk = g.friends.remarkOf(*p, *q, pl);
+
+    struct List {
+        std::string title;
+        PlatformKindFH pl;
+        std::vector<std::string> ids;
+    };
+    std::vector<List> lists;
+    lists.push_back(List{"QQ 好友", PlatformKindFH::QQ,
+                         g.friends.friendIds(*p, PlatformKindFH::QQ)});
+    lists.push_back(List{"微信好友", PlatformKindFH::WeChat,
+                         g.friends.friendIds(*p, PlatformKindFH::WeChat)});
+    lists.push_back(List{"微博关注（单向）", PlatformKindFH::Weibo,
+                         g.friends.followingIds(*p)});
+
+    int left = std::max(6, budget);
+    for (std::size_t li = 0; li < lists.size(); ++li) {
+        const auto& L = lists[li];
+        const int share =
+            std::max(1, left / static_cast<int>(lists.size() - li));
+        const int show =
+            std::min<int>(static_cast<int>(L.ids.size()), share);
+
+        s.blank();
+        s.section(L.title + " " + std::to_string(L.ids.size()) + " 人");
+        if (L.ids.empty()) s.item("（空）");
+        for (int i = 0; i < show; ++i) {
+            const std::string& id = L.ids[static_cast<std::size_t>(i)];
+            std::string line = nickOf(L.pl, id);
+            if (ProfilePtr q = findProfile(L.pl, id)) {
+                const std::string rk = g.friends.remarkOf(*p, *q, L.pl);
                 if (!rk.empty()) line += "（备注：" + rk + "）";
             }
-            std::cout << line << "\n";
+            s.item(line);
         }
-    };
-    showList("QQ 好友", PlatformKindFH::QQ,
-             g.friends.friendIds(*p, PlatformKindFH::QQ));
-    showList("微信好友", PlatformKindFH::WeChat,
-             g.friends.friendIds(*p, PlatformKindFH::WeChat));
-    showList("微博关注（单向）", PlatformKindFH::Weibo,
-             g.friends.followingIds(*p));
+        if (static_cast<int>(L.ids.size()) > show)
+            s.text("    …… 还有 " +
+                   std::to_string(L.ids.size() - static_cast<std::size_t>(show)) +
+                   " 人未显示（放大窗口后可看全）");
+
+        left -= 1 + (show > 0 ? show : 1);
+        if (left < 1) left = 1;
+    }
 }
 
 void runContacts() {
     for (;;) {
-        cls();
-        uiRule("通讯录 · 好友与关注（阶段 C · 按平台隔离）");
-        drawFriendLists();
-        std::cout << "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]添加QQ好友  [2]添加微信好友  [3]微博关注\n"
-                     "  [4]删除QQ好友  [5]删除微信好友  [6]取消微博关注\n"
-                     "  [7]修改好友备注  [8]查询共同好友  [9]跨服务推荐添加\n"
-                     "  [0]返回\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "  请按键选择：";
+        fh_ui::Screen s("通讯录 · 好友与关注（阶段 C · 按平台隔离）");
+        drawFriendLists(s, s.rowsLeft() - 7);  // 预留：菜单 + 状态条 + 提示行
+
+        s.blank();
+        s.section("可用操作");
+        s.menu({{'1', "添加QQ好友"}, {'2', "添加微信好友"}, {'3', "微博关注"},
+                {'4', "删除QQ好友"}, {'5', "删除微信好友"}, {'6', "取消微博关注"},
+                {'7', "修改好友备注"}, {'8', "查询共同好友"},
+                {'9', "跨服务推荐添加"}, {'0', "返回"}});
+        present(s);
         const char k = waitKey();
+
         ProfilePtr target = nullptr;
         auto needPick = [&](PlatformKindFH pl, const std::string& title,
                             bool markRelation = false) -> bool {
@@ -1693,12 +1863,14 @@ void runContacts() {
             continue;
         case '7': {  // 修改好友备注（任务书 2.(1) 好友信息“修改”）
             const int pl =
-                chooseByLabels("  给哪个平台的好友写备注？> ",
+                chooseByLabels("给哪个平台的好友写备注？",
                                {"QQ 好友", "微信好友"});
             if (pl >= 0 &&
                 needPick(pl == 0 ? PlatformKindFH::QQ : PlatformKindFH::WeChat,
-                         "  选择要备注的好友> ", true)) {
-                const auto remark = askText("  输入备注名（直接回车取消）> ");
+                         "选择要备注的好友", true)) {
+                s.prompt("输入备注名（直接回车取消）：");
+                s.flush();
+                const auto remark = askText("");
                 if (remark) {
                     const PlatformKindFH pf = pl == 0 ? PlatformKindFH::QQ
                                                       : PlatformKindFH::WeChat;
@@ -1716,18 +1888,18 @@ void runContacts() {
         }
         case '8': {  // 查询共同好友（任务书 2.(2)）
             const int w =
-                chooseByLabels("  查询哪类共同关系？> ",
+                chooseByLabels("查询哪类共同关系",
                                {"QQ 共同好友", "微信共同好友", "微博共同关注"});
             PlatformKindFH pf = PlatformKindFH::QQ;
             bool okPick = false;
             if (w == 0)
-                okPick = needPick(PlatformKindFH::QQ, "  选择要对比的人> ");
+                okPick = needPick(PlatformKindFH::QQ, "选择要对比的人");
             else if (w == 1) {
                 pf = PlatformKindFH::WeChat;
-                okPick = needPick(PlatformKindFH::WeChat, "  选择要对比的人> ");
+                okPick = needPick(PlatformKindFH::WeChat, "选择要对比的人");
             } else if (w == 2) {
                 pf = PlatformKindFH::Weibo;
-                okPick = needPick(PlatformKindFH::Weibo, "  选择要对比的人> ");
+                okPick = needPick(PlatformKindFH::Weibo, "选择要对比的人");
             } else {
                 noticeFail("已取消。");
                 continue;
@@ -1748,18 +1920,29 @@ void runContacts() {
                 title =
                     "你与 " + target->getNickname() + " 在微博的共同关注";
             }
-            std::cout << "  " << title << "（" << ids.size() << " 人）：\n";
-            if (ids.empty()) std::cout << "    (空)\n";
-            for (const auto& id : ids)
-                std::cout << "    · " << nickOf(pf, id) << " [" << id
-                          << "]\n";
-            std::cout << "  按任意键返回：";
+            fh_ui::Screen r("共同关系查询");
+            r.kv("对比对象", target->getNickname());
+            r.kv("平台", platCn(pf));
+            r.kv("共同数量", std::to_string(ids.size()) + " 人");
+            r.blank();
+            r.section(title);
+            if (ids.empty()) r.item("（空）");
+            const int show = std::min<int>(
+                static_cast<int>(ids.size()), std::max(1, r.rowsLeft() - 1));
+            for (int i = 0; i < show; ++i)
+                r.item(nickOf(pf, ids[static_cast<std::size_t>(i)]) + " [" +
+                       ids[static_cast<std::size_t>(i)] + "]");
+            if (static_cast<int>(ids.size()) > show)
+                r.text("    …… 还有 " +
+                       std::to_string(ids.size() - static_cast<std::size_t>(show)) +
+                       " 人未显示");
+            present(r, "按任意键返回：");
             waitKey();
             continue;
         }
         case '9': {  // 跨服务推荐添加好友（任务书 2.(2)/6.(3)）
             const int d = chooseByLabels(
-                "  依据哪个服务的现有好友？> ",
+                "跨服务推荐添加",
                 {"依据 QQ 好友 → 添加微信好友", "依据微信好友 → 添加 QQ 好友"});
             if (d < 0) {
                 noticeFail("已取消。");
@@ -1784,26 +1967,27 @@ void runContacts() {
                     if (!g.friends.isFriend(*g.me, *p, to)) ++notYetTarget;
                 }
                 auto mark = [](bool ok) { return ok ? "✔" : "✘"; };
-                cls();
-                uiRule("跨服务推荐添加好友 · 暂无可推荐");
-                std::cout << "  方向：" << toZhName(from) << " 好友 → 添加"
-                          << toZhName(to) << "好友（任务书 2.(2)、6.(3)）\n"
-                          << "  以下条件须同时满足，逐条核对当前状态：\n";
-                std::cout << "   ① 本人已开通来源与目标服务："
-                          << toZhName(from) << " " << mark(g.me->isActivated(from))
-                          << "  " << toZhName(to) << " " << mark(g.me->isActivated(to))
-                          << "    ← 【账号中心】[1]开通服务\n";
-                std::cout << "   ② 对方已是你的" << toZhName(from) << "好友：当前 "
-                          << fromFriendCount << " 人"
-                          << (fromFriendCount ? "" : "    ← 【通讯录】[1]先加好友")
-                          << "\n";
-                std::cout << "   ③ 对方已绑定" << toZhName(to) << "账号：候选 "
-                          << withTarget << " 人\n";
-                std::cout << "   ④ 对方尚不是你的" << toZhName(to) << "好友：其中 "
-                          << notYetTarget << " 人满足\n";
-                std::cout << "  建议顺序：账号中心开通" << toZhName(to) << " → 通讯录加 "
-                          << toZhName(from) << "好友 → 回到 [9] 选择本方向\n";
-                std::cout << "  按任意键返回：";
+                const std::string fromCn = toZhName(from);
+                const std::string toCn = toZhName(to);
+                fh_ui::Screen r("跨服务推荐添加好友 · 暂无可推荐");
+                r.kv("方向", fromCn + " 好友 → 添加" + toCn +
+                                "好友（任务书 2.(2)、6.(3)）");
+                r.text("  以下四个条件须同时满足，逐条核对当前状态：");
+                r.item("① 本人已开通来源与目标服务：" + fromCn + " " +
+                       mark(g.me->isActivated(from)) + "   " + toCn + " " +
+                       mark(g.me->isActivated(to)) + "（可在【账号中心】[1] 开通）");
+                r.item("② 对方已是你的" + fromCn + "好友：当前 " +
+                       std::to_string(fromFriendCount) + " 人" +
+                       (fromFriendCount ? std::string()
+                                        : std::string("（【通讯录】[1] 先加好友）")));
+                r.item("③ 对方已绑定" + toCn + "账号：候选 " +
+                       std::to_string(withTarget) + " 人");
+                r.item("④ 对方尚不是你的" + toCn + "好友：其中 " +
+                       std::to_string(notYetTarget) + " 人满足");
+                r.blank();
+                r.text("  建议顺序：账号中心开通" + toCn + " → 通讯录加 " + fromCn +
+                       "好友 → 回到 [9] 选择本方向。");
+                present(r, "按任意键返回：");
                 waitKey();
                 continue;
             }
@@ -1813,7 +1997,7 @@ void runContacts() {
                                  toZhName(from) + "好友 → " + toZhName(to) +
                                  " " + q->platformAccountId(to) + "）");
             const int idx =
-                chooseByLabels("  选择要添加为好友的人> ", labels);
+                chooseByLabels("选择要添加为好友的人", labels);
             if (idx < 0) {
                 noticeFail("已取消。");
                 continue;
@@ -1842,25 +2026,28 @@ void runContacts() {
 
 void runCreateScreen() {
     for (;;) {
-        cls();
-        uiRule("创建群 / 讨论组");
-        std::cout << "  说明：\n"
-                     "    · 本地正式群 = 聚合根 GroupFH，支持完整群管理（邀请/踢人/"
-                     "禁言/任命/转让/解散等），按 QQ / 微信群策略工作；\n"
-                     "    · QQ 临时讨论组 = 容量 20 的轻量组，任何成员可邀请、"
-                     "成员自由退、仅发起人可解散；\n"
-                     "    · 官方群大厅里也能创建“官方自建群”（走群号分配）。\n"
-                     "  ------------------------------------------------------------------\n";
-        std::cout << "  [1]创建本地正式群（QQ/微信）  [2]创建 QQ 临时讨论组  [0]返回\n";
-        std::cout << "  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "  请按键选择：";
+        fh_ui::Screen s("创建群 / 讨论组");
+        s.section("三种“群”的区别");
+        s.item("本地正式群 = 聚合根 GroupFH，支持完整群管理（邀请/踢人/禁言/"
+               "任命/转让/解散等），按 QQ / 微信群策略工作");
+        s.item("QQ 临时讨论组 = 容量 20 的轻量组，任何成员可邀请、成员自由退、"
+               "仅发起人可解散");
+        s.item("官方自建群 = 在【官方群大厅】创建，群号自动分配（从 1007 起）");
+        s.blank();
+        s.section("可用操作");
+        s.menu({{'1', "创建本地正式群（QQ/微信）"},
+                {'2', "创建 QQ 临时讨论组"},
+                {'0', "返回"}});
+        present(s);
         const char k = waitKey();
 
         if (k == '1') {
-            std::cout << "  选择正式群的平台（决定使用哪套群策略）：\n"
-                         "   [1]QQ 群  [2]微信群  [0]取消\n"
-                         "  请选择：";
+            {
+                fh_ui::Screen p("创建正式群：选择平台");
+                p.menu({{'1', "QQ 群"}, {'2', "微信群"}, {'0', "取消"}});
+                p.prompt("请按键选择（平台决定使用哪套群策略）：");
+                p.flush();
+            }
             const char pk = waitKey();
             PlatformKindFH pl;
             if (pk == '1')
@@ -1876,17 +2063,25 @@ void runCreateScreen() {
                            "（微信群请先绑定微信号）。");
                 continue;
             }
-            auto name = askText("  新群名称（直接回车取消）> ");
+            fh_ui::Screen f("创建正式群：填写信息");
+            f.kv("平台", platCn(pl));
+            f.kv("群主", g.me->getNickname());
+            f.prompt("新群名称（直接回车取消）：");
+            f.flush();
+            auto name = askText("");
             if (!name) {
                 noticeInfo("已取消");
                 continue;
             }
             bool memberInvite = false;
             if (pl == PlatformKindFH::QQ) {
-                std::cout << "  是否开启“QQ 普通成员可邀请”开关？[y]开启 / [n]关闭：";
+                f.prompt("是否开启“QQ 普通成员可邀请”开关？[y]开启 / [n]关闭：");
+                f.flush();
                 memberInvite = waitKey() == 'y';
             }
-            const auto cap = askNum("  群人数上限（默认 30，直接回车使用默认）> ", 1, 500);
+            f.prompt("群人数上限（默认 30，直接回车使用默认）：");
+            f.flush();
+            const auto cap = askNum("", 1, 500);
             const std::size_t maxMembers =
                 cap < 0 ? 30 : static_cast<std::size_t>(cap);
             busy("建群处理");
@@ -1917,7 +2112,12 @@ void runCreateScreen() {
                 noticeFail("QQ 临时讨论组需要 QQ 账号（QQ/微博注册即拥有）。");
                 continue;
             }
-            auto name = askText("  讨论组名称（直接回车取消）> ");
+            fh_ui::Screen d("创建 QQ 临时讨论组");
+            d.kv("发起人", g.me->getNickname());
+            d.kv("容量", "20 人（成员可互邀、自由退，仅发起人可解散）");
+            d.prompt("讨论组名称（直接回车取消）：");
+            d.flush();
+            auto name = askText("");
             if (!name) {
                 noticeInfo("已取消");
                 continue;
@@ -1942,32 +2142,52 @@ void runCreateScreen() {
 // 返回 true 表示已选定 g.me；返回 false 表示请求退出程序
 bool runAccountGate() {
     for (;;) {
-        cls();
-        std::cout << "\n";
-        uiRule("微X 平台 · 终端客户端（手动测试工作台）");
-        std::cout << "  请选择当前操作的自然人账号（演示数据）：\n";
-        std::vector<ProfilePtr> hits;
-        for (std::size_t i = 0; i < g.people.size(); ++i) {
-            const auto& p = g.people[i];
-            std::cout << "   [" << (i + 1) << "] " << p->getNickname()
-                      << "（QQ/微博 " << p->getQQId();
-            if (p->hasWeChatAccount())
-                std::cout << "，微信 " << p->getWeChatId();
-            else
-                std::cout << "，未绑定微信";
-            std::cout << "）\n";
-            hits.push_back(p);
-        }
-        // 注册 / 说明采用动态编号（账号数 +1 / +2），避免与账号序号冲突
+        fh_ui::Screen s("微X 平台 · 终端客户端（手动测试工作台）");
+        s.text("  请选择当前操作的自然人账号（演示数据）：");
         const std::size_t n = g.people.size();
+        // 注册 / 说明采用动态编号（账号数 +1 / +2），避免与账号序号冲突
         const std::size_t regKey = n + 1;
         const std::size_t helpKey = n + 2;
-        std::cout << "  ------------------------------------------------------------------\n";
+
+        std::vector<ProfilePtr> hits;
+        std::vector<fh_ui::MenuItem> accounts;
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto& p = g.people[i];
+            const std::string label =
+                p->getNickname() + "（QQ/微博 " + p->getQQId() +
+                (p->hasWeChatAccount() ? "，微信 " + p->getWeChatId()
+                                       : "，未绑定微信") +
+                "）";
+            if (n <= 7)
+                accounts.push_back(
+                    fh_ui::MenuItem{static_cast<char>('1' + i), label});
+            else
+                s.text("    [" + std::to_string(i + 1) + "] " + label);
+            hits.push_back(p);
+        }
+
+        s.blank();
+        s.section("演示账号（" + std::to_string(n) + " 个）");
+        if (n <= 7) {
+            s.menu(accounts, 1);  // 账号标签较长，保持一行一个
+        } else {
+            s.text("    （账号较多，请按序号输入）");
+        }
+
+        s.blank();
+        s.section("其他操作");
+        if (n <= 7) {
+            s.menu({{static_cast<char>('0' + regKey), "注册新账号"},
+                    {static_cast<char>('0' + helpKey), "操作说明"},
+                    {'0', "退出"}});
+        } else {
+            s.text("    [" + std::to_string(regKey) + "] 注册新账号");
+            s.text("    [" + std::to_string(helpKey) + "] 操作说明");
+            s.text("    [0] 退出");
+        }
+        present(s);
         std::size_t num = 0;
         if (n <= 7) {
-            std::cout << "  [" << regKey << "]注册新账号  [" << helpKey
-                      << "]操作说明  [0]退出\n";
-            std::cout << "  请选择：";
             const char k = waitKey();
             if (k == '0') return false;
             num = (k >= '0' && k <= '9') ? static_cast<std::size_t>(k - '0') : 0;
@@ -1976,22 +2196,33 @@ bool runAccountGate() {
                 continue;
             }
         } else {
-            const long r = askNum("  输入序号（1~" + std::to_string(n) +
-                                      " 选账号，" + std::to_string(regKey) +
-                                      " 注册，" + std::to_string(helpKey) +
-                                      " 说明，0 退出）> ",
-                                  0, static_cast<long>(helpKey));
+            const long r = askNum("> ", 0, static_cast<long>(helpKey));
             if (r <= 0) return false;
             num = static_cast<std::size_t>(r);
         }
         if (num == regKey) {
-            auto qq = askText("  新 QQ 号（唯一，直接回车取消）> ");
+            fh_ui::Screen r("注册新账号");
+            r.prompt("新 QQ 号（唯一，直接回车取消）：");
+            r.flush();
+            auto qq = askText("");
             if (!qq) { noticeInfo("已取消注册"); continue; }
-            auto nick = askText("  昵称（直接回车取消）> ");
+            r.kv("QQ 号", *qq);
+
+            r.prompt("昵称（直接回车取消）：");
+            r.flush();
+            auto nick = askText("");
             if (!nick) { noticeInfo("已取消注册"); continue; }
-            auto loc = askText("  所在地（如：广东·深圳）> ");
+            r.kv("昵称", *nick);
+
+            r.prompt("所在地（如：广东·深圳，直接回车跳过）：");
+            r.flush();
+            auto loc = askText("");
             std::string locv = loc ? *loc : "未知";
-            auto year = askNum("  注册年份（1~2026）> ", 1, 2026);
+            r.kv("所在地", locv);
+
+            r.prompt("注册年份（1~2026，直接回车取消）：");
+            r.flush();
+            auto year = askNum("", 1, 2026);
             if (year < 0) { noticeInfo("已取消注册"); continue; }
             busy("注册处理");
             try {
@@ -2011,26 +2242,27 @@ bool runAccountGate() {
             }
         }
         if (num == helpKey) {
-            cls();
-            uiRule("操作说明");
-            std::cout << R"guide(本工作台按真实 IM 客户端的逻辑组织操作路径：
-
-  ① 选账号进入主界面后，先在【账号中心】完成“开通/登录”体验；
-     QQ/微博已默认开通，微信需先绑定微信号再手动开通（阶段 B）。
-  ② 【官方群大厅】可浏览 QQ/微信/微博官方群（1001~1006）并加入，
-     聊天支持文本/图片/文件/语音/表情——平台差异（微信禁文件、微博
-     仅文本/表情、文本上限、引用回复）会即时提示（阶段 C/D）。
-  ③ 【创建】可建“本地正式群”（QQ 或微信群策略）体验完整群管理：
-     发消息、撤回（时间窗 120 秒）、邀请、踢人、禁言、全员禁言、
-     任命管理员、公告、改群名、转让群主、切换管理模式、解散群
-     （阶段 A）。也可创建 QQ 临时讨论组（阶段 C）。
-  ④ 【我的会话】进入任一已加入会话开始操作；【通讯录】管理
-     QQ/微信双向好友与微博单向关注（阶段 C）。
-  全部操作项均为数字键（0 = 返回上级 / 更多操作），界面底部提示条会
-  显示每一步成功或失败的原因；每次操作后界面自动重绘。
-)guide";
-            std::cout << "  按任意键返回：";
-            waitKey();
+            showPagedHelp("操作说明", {
+                {false, "本工作台按真实 IM 客户端的逻辑组织操作路径："},
+                {true, "① 账号层（阶段 B）"},
+                {false, "在【账号中心】完成“开通 / 登录”体验：QQ 与微博默认已开通，"
+                        "微信需先绑定微信号再手动开通"},
+                {true, "② 群目录（阶段 C / D）"},
+                {false, "【官方群大厅】浏览 QQ/微信/微博官方群（1001~1006）并加入；"
+                        "聊天支持文本/图片/文件/语音/表情，平台差异（微信禁文件、"
+                        "微博仅文本表情、文本上限、引用回复）会即时提示"},
+                {true, "③ 群管理（阶段 A）"},
+                {false, "【创建】可建“本地正式群”（QQ 或微信群策略）体验完整群管理："
+                        "发消息、撤回（时间窗 120 秒）、邀请、踢人、禁言、全员禁言、"
+                        "任命管理员、公告、改群名、转让群主、切换管理模式、解散群"},
+                {false, "也可创建 QQ 临时讨论组（阶段 C）"},
+                {true, "④ 会话与社交（阶段 C）"},
+                {false, "【我的会话】进入任一已加入会话开始操作；"
+                        "【通讯录】管理 QQ/微信双向好友与微博单向关注"},
+                {false, "全部操作项均为数字键（0 = 返回上级 / 更多操作）；"
+                        "界面底部状态条会显示每一步成功或失败的原因，"
+                        "每次操作后界面自动重绘"},
+            });
             continue;
         }
         if (num >= 1 && num <= hits.size()) {
@@ -2048,36 +2280,42 @@ bool runAccountGate() {
 // ============================================================
 
 void runHelp() {
-    cls();
-    uiRule("手动测试指引（建议按顺序走查）");
-    std::cout << R"guide(【体系说明】群分两套：正式群（聚合根 GroupFH，群号 9000+，走【创建】）
-  与官方/自建群（群注册表，群号 1001~1006 / 1007+，走【官方群大厅】）。
-【A · 正式群管理（本地正式群）】
-  1) 创建 QQ 正式群与微信群各一个（允许普通成员邀请开关选一次开/关）；
-  2) 切换到其他账号把对方邀请进群、任命管理员；
-  3) 分别用不同身份测试：普通成员邀请（QQ开关 vs 微信禁止）、
-     管理员设全员禁言（QQ 可、微信仅群主）、禁言后普通成员发言失败、
-     撤回时间窗、转让群主后原群主仅剩成员权限、切模式成员不丢、解散后一切被拒。
-  4) 会话内按 [0] 进入“更多操作”：切换管理模式 / 转让群主 / 解散群 /
-     退出本群（群主不能直接退群，须先转让或解散）/ 群设置（改邀请开关、
-     把撤回窗口调小以复现“超时不可撤回”）/ 以其他成员身份操作。
-【B · 多产品体系（账号中心）】
-  0) 先分清三层：有账号（身份）→ 已开通（你自选启用，任务书第 4 点）→ 在线（已登录）。
-     三者互相独立 —— “绑定了微信号”只说明有账号，不等于已开通微信服务；
-     任务书里的“服务”指的是 QQ/微信/微博 这类微X 产品本身，不是第三方应用。
-  1) 用新注册账号体验：未开通服务登录失败→开通→登录联动（全部上线）；
-  2) 在线时取消开通被拒→退出后取消成功；
-  3) 微信：先绑定→开通→登录；重复开通/绑定失败均有提示。
-【C · 社交（通讯录 / 大厅 / 讨论组）】
-  1) QQ/微信双向好友、微博单向关注；删除 QQ 好友不影响微信（平台隔离）；
-  2) 加入官方群/自建官方群；未绑微信者不能入微信群；
-  3) QQ 临时讨论组：成员可互邀、自由退、仅发起人解散。
-【D · 消息平台差异（官方群聊天）】
-  在 QQ/微信/微博各官方群试发：文件、图片、超长文本、引用回复，
-  观察允许与否的差异提示与“产品视图”渲染的差异。
-)guide";
-    std::cout << "  按任意键返回：";
-    waitKey();
+    const std::vector<HelpEntry> entries = {
+        HelpEntry{true, "体系说明"},
+        HelpEntry{false,
+                  "群分两套：正式群（聚合根 GroupFH，群号 9000+，走【创建】）"
+                  "与官方/自建群（群注册表，群号 1001~1006 / 1007+，走【官方群大厅】）。"},
+        HelpEntry{true, "A · 正式群管理（本地正式群）"},
+        HelpEntry{false, "创建 QQ 正式群与微信群各一个（成员邀请开关选一次开 / 一次关）"},
+        HelpEntry{false, "切换到其他账号把对方邀请进群、任命管理员"},
+        HelpEntry{false,
+                  "分别用不同身份测试：普通成员邀请（QQ 开关 vs 微信禁止）；"
+                  "管理员设全员禁言（QQ 可、微信仅群主）；禁言后普通成员发言失败；"
+                  "撤回时间窗；转让群主后原群主仅剩成员权限；切模式成员不丢；解散后一切被拒"},
+        HelpEntry{false,
+                  "会话内按 [0] 进入“更多操作”：切换管理模式 / 转让群主 / 解散群 / "
+                  "退出本群（群主不能直接退群，须先转让或解散）/ 群设置（改邀请开关、"
+                  "把撤回窗口调小以复现“超时不可撤回”）/ 以其他成员身份操作"},
+        HelpEntry{true, "B · 多产品体系（账号中心）"},
+        HelpEntry{false,
+                  "先分清三层：有账号（身份）→ 已开通（你自选启用，任务书第 4 点）"
+                  "→ 在线（已登录）；三者互相独立"},
+        HelpEntry{false,
+                  "“绑定了微信号”只说明有账号，不等于已开通微信服务；任务书里的“服务”"
+                  "指的是 QQ/微信/微博 这类微X 产品本身，不是第三方应用"},
+        HelpEntry{false, "用新注册账号体验：未开通服务登录失败 → 开通 → 登录联动（全部上线）"},
+        HelpEntry{false, "在线时取消开通被拒 → 退出后取消成功"},
+        HelpEntry{false, "微信：先绑定 → 开通 → 登录；重复开通 / 绑定失败均有提示"},
+        HelpEntry{true, "C · 社交（通讯录 / 大厅 / 讨论组）"},
+        HelpEntry{false, "QQ/微信双向好友、微博单向关注；删除 QQ 好友不影响微信（平台隔离）"},
+        HelpEntry{false, "加入官方群 / 自建官方群；未绑微信者不能入微信群"},
+        HelpEntry{false, "QQ 临时讨论组：成员可互邀、自由退、仅发起人可解散"},
+        HelpEntry{true, "D · 消息平台差异（官方群聊天）"},
+        HelpEntry{false,
+                  "在 QQ/微信/微博各官方群试发：文件、图片、超长文本、引用回复，"
+                  "观察允许与否的差异提示与“产品视图”渲染的差异"},
+    };
+    showPagedHelp("手动测试指引（建议按顺序走查）", entries);
 }
 
 // ============================================================
@@ -2087,34 +2325,31 @@ void runHelp() {
 // 返回 false 表示退出整个程序
 bool runWorkspace() {
     for (;;) {
-        cls();
-        uiRule("微X 平台 · 终端客户端（手动测试工作台）");
-        std::cout << "\n";
-        drawAccountCard();
-
-        std::cout << "\n  —— 我的会话概览 ——\n";
-        {
-            int nLocal = 0, nOfficial = 0, nDisc = 0;
-            for (const auto& s : g.locals) {
-                const auto u = actorFor(g.me, s.platform);
-                if (u && !s.group->isDisbanded() && s.group->contains(u)) ++nLocal;
-            }
-            for (const GroupInfoFH* gi : g.official.groupsOfUser(*g.me))
-                (void)gi, ++nOfficial;
-            for (const auto& d : g.discs)
-                if (!d->isDisbanded() && d->contains(g.me->getQQId())) ++nDisc;
-            std::cout << "     正式群 " << nLocal << "   ·   官方/自建群 " << nOfficial
-                      << "   ·   QQ 讨论组 " << nDisc << "\n";
+        int nLocal = 0, nOfficial = 0, nDisc = 0;
+        for (const auto& slot : g.locals) {
+            const auto u = actorFor(g.me, slot.platform);
+            if (u && !slot.group->isDisbanded() && slot.group->contains(u)) ++nLocal;
         }
+        for (const GroupInfoFH* gi : g.official.groupsOfUser(*g.me))
+            (void)gi, ++nOfficial;
+        for (const auto& d : g.discs)
+            if (!d->isDisbanded() && d->contains(g.me->getQQId())) ++nDisc;
 
-        std::cout << "\n  —— 主菜单 ——\n"
-                     "     [1] 我的会话          [2] 官方群大厅         [3] 通讯录·好友\n"
-                     "     [4] 账号中心          [5] 创建群 / 讨论组    [6] 切换账号\n"
-                     "     [7] 测试指引          [0] 退出\n";
+        fh_ui::Screen s("微X 平台 · 终端客户端（手动测试工作台）");
+        drawAccountCard(s);
 
-        if (!g.notice.empty()) std::cout << "\n  " << g.notice << "\n";
-        g.notice.clear();
-        std::cout << "\n  请按键选择：";
+        s.blank();
+        s.section("我的会话概览");
+        s.kv("正式群", std::to_string(nLocal) + " 个");
+        s.kv("官方/自建群", std::to_string(nOfficial) + " 个");
+        s.kv("QQ 讨论组", std::to_string(nDisc) + " 个");
+
+        s.blank();
+        s.section("主菜单");
+        s.menu({{'1', "我的会话"}, {'2', "官方群大厅"}, {'3', "通讯录·好友"},
+                {'4', "账号中心"}, {'5', "创建群 / 讨论组"}, {'6', "切换账号"},
+                {'7', "测试指引"}, {'0', "退出"}});
+        present(s);
         const char k = waitKey();
         switch (k) {
         case '1': runConversationList(); break;

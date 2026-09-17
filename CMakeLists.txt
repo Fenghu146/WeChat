@@ -18,7 +18,8 @@ add_library(im_core_fh
 target_include_directories(im_core_fh PUBLIC include)
 
 # 控制台演示程序：main 负责自动演示(--demo)入口，client_ui 实现手动测试工作台
-add_executable(demo_fh app/main.cpp app/client_ui.cpp app/demo_runner.cpp)
+# ui_screen 提供共用的终端排版能力（标题栏/键值卡片/菜单列/整帧重绘）
+add_executable(demo_fh app/main.cpp app/client_ui.cpp app/demo_runner.cpp app/ui_screen.cpp)
 target_link_libraries(demo_fh PRIVATE im_core_fh)
 
 # ============================================================
