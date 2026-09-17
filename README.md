@@ -57,9 +57,15 @@ tests/              9 个回归套件（共 98 个用例）+ 自包含断言框�
 cmake -S . -B build
 cmake --build build --config Debug
 ./build/Debug/demo_fh.exe          # Windows：默认进入手动测试工作台
-./build/Debug/demo_fh.exe --demo   # 先自动跑完 A→D 演示再进工作台
-# Linux/macOS: ./build/demo_fh [--demo]
+./build/Debug/demo_fh.exe --demo   # 自动跑完 A→D 全部演示，再进工作台
+./build/Debug/demo_fh.exe --demo=C # 只演示某一段（A 核心流程 / B 多产品 / C 社交 / D 消息）
+# Linux/macOS: ./build/demo_fh [--demo[=A|B|C|D]]
 ```
+
+`--demo` 在交互终端下每段之间等待回车，便于边讲边停；结束时输出**演示自检汇总**
+（校验项总数、其中「应失败」的平台规则 / 权限校验项数、是否存在与预期不符项）。
+终端下自动着色：**绿色 = 符合预期，红色 = 与预期不符**；可用 `FH_DEMO_COLOR=1`
+强制开启、`NO_COLOR=1` 关闭。
 
 进入工作台后先选择演示账号；账号列表末尾的「操作说明」（主界面为「测试指引」）可查看操作指引与建议测试路径。
 **所有操作项均为数字键**（`0` = 返回上级 / 进入「更多操作」，触发无需回车；

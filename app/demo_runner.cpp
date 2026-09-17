@@ -2,13 +2,24 @@
 // DemoRunner —— 自动演示运行器实现
 // ============================================================
 #include "demo_runner.hpp"
+#include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <iostream>
 #include <memory>
 #include <set>
 #include <string>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "im/message/message_kind_fh.hpp"
 #include "im/message/platform_message_policy_fh.hpp"
@@ -35,7 +46,102 @@ namespace {
 
 unsigned g_messageSeq = 0;
 
-const char* ok(bool value) { return value ? "成功" : "失败"; }
+// ---------- 演示自检与呈现 ----------
+// 着色约定：绿色 = 符合预期，红色加粗 = 与预期不符（演示里的失败大多是被
+// 平台规则/权限刻意拒绝的「应失败」项，按成败着色会把真正的异常淹没）。
+
+DemoSummary g_summary;
+bool g_color = false;
+bool g_interactive = false;
+
+const char* kColorOk = "\033[32m";
+const char* kColorBad = "\033[1;31m";
+
+std::string paint(const std::string& text, const char* code) {
+    if (!g_color) return text;
+    return std::string(code) + text + "\033[0m";
+}
+
+// 期望成功的校验（绝大多数业务操作）
+std::string ok(bool value) {
+    ++g_summary.total;
+    if (value) {
+        ++g_summary.success;
+        return paint("成功", kColorOk);
+    }
+    ++g_summary.failure;
+    ++g_summary.unexpectedFail;  // 应成功却失败
+    return paint("失败", kColorBad);
+}
+
+// 期望失败的校验（平台规则 / 权限要求必须拒绝，输出中标注「应失败」）
+std::string okDenied(bool value) {
+    ++g_summary.total;
+    ++g_summary.expectedFail;
+    if (!value) {
+        ++g_summary.failure;
+        return paint("失败", kColorOk);
+    }
+    ++g_summary.success;
+    ++g_summary.unexpectedPass;  // 应失败却成功
+    return paint("成功", kColorBad);
+}
+
+bool stdoutIsTty() {
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    return h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode) != 0;
+#else
+    return isatty(fileno(stdout)) != 0;
+#endif
+}
+
+bool stdinIsTty() {
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    return h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode) != 0;
+#else
+    return isatty(fileno(stdin)) != 0;
+#endif
+}
+
+// 颜色开关：NO_COLOR 关闭；FH_DEMO_COLOR=1 强制开启；否则按输出是否为终端判断
+void initDemoOutput() {
+    if (std::getenv("NO_COLOR") != nullptr) {
+        g_color = false;
+    } else if (const char* force = std::getenv("FH_DEMO_COLOR"); force && *force == '1') {
+        g_color = true;
+    } else {
+        g_color = stdoutIsTty();
+    }
+#ifdef _WIN32
+    if (g_color) {  // Windows 10+ 需显式开启 VT 序列处理
+        HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode = 0;
+        if (h == INVALID_HANDLE_VALUE || !GetConsoleMode(h, &mode) ||
+            !SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+            g_color = false;
+        }
+    }
+#endif
+    g_interactive = stdinIsTty();
+
+    if (g_color)
+        std::cout << "（颜色说明：" << paint("绿色", kColorOk) << " = 符合预期，"
+                  << paint("红色", kColorBad) << " = 与预期不符）\n";
+}
+
+// 分段演示之间的暂停：仅在交互终端下等待回车，管道/重定向环境直接跳过
+void pauseBetweenScenarios() {
+    if (!g_interactive) return;
+    std::cout << "\n  —— 回车继续下一段演示 ——";
+    std::cout.flush();
+    std::string line;
+    std::getline(std::cin, line);
+    if (!std::cin) std::cin.clear();
+}
 
 // 生成带自增 ID 的消息
 std::shared_ptr<MessageFH> makeMessage(const std::shared_ptr<UserFH>& sender,
@@ -145,23 +251,23 @@ void runAutoScenario() {
     std::cout << "\n[2] 邀请规则差异：\n";
     std::cout << "    QQ 普通成员邀请路人甲（开关开启）："
               << ok(qqGroup.inviteMember(member, outsider)) << "\n";
-    std::cout << "    微信普通成员邀请路人甲：" << ok(wxGroup.inviteMember(member, outsider))
+    std::cout << "    微信普通成员邀请路人甲：" << okDenied(wxGroup.inviteMember(member, outsider))
               << "（应失败，微信群仅群主可推荐加入）\n";
-    std::cout << "    微信管理员邀请路人甲：" << ok(wxGroup.inviteMember(admin, outsider))
+    std::cout << "    微信管理员邀请路人甲：" << okDenied(wxGroup.inviteMember(admin, outsider))
               << "（应失败，同上；微信管理员不产生特权）\n";
     std::cout << "    微信群主邀请路人甲：" << ok(wxGroup.inviteMember(owner, outsider))
               << "（仅群主可邀请）\n";
     std::cout << "    路人甲再次加入 QQ 群（成员唯一）："
-              << ok(qqGroup.inviteMember(owner, outsider)) << "（应失败）\n";
+              << okDenied(qqGroup.inviteMember(owner, outsider)) << "（应失败）\n";
 
     std::cout << "\n[3] 全员禁言设置差异：\n";
     std::cout << "    QQ 管理员设置全员禁言：" << ok(qqGroup.setAllMute(admin, true)) << "\n";
-    std::cout << "    微信管理员设置全员禁言：" << ok(wxGroup.setAllMute(admin, true))
+    std::cout << "    微信管理员设置全员禁言：" << okDenied(wxGroup.setAllMute(admin, true))
               << "（应失败，仅群主）\n";
     std::cout << "    微信群主设置全员禁言：" << ok(wxGroup.setAllMute(owner, true)) << "\n";
 
     std::cout << "\n[4] 全员禁言下的发言限制：\n";
-    std::cout << "    QQ 普通成员发言：" << ok(qqGroup.sendMessage(
+    std::cout << "    QQ 普通成员发言：" << okDenied(qqGroup.sendMessage(
                   member, makeMessage(member, "禁言期间的发言")))
               << "（应失败）\n";
     std::cout << "    QQ 群主发言：" << ok(qqGroup.sendMessage(
@@ -174,7 +280,7 @@ void runAutoScenario() {
     std::cout << "\n[5] 动态切换群管理模式（官方：成员数据不受伤害）：\n";
     std::cout << "    QQ 群切到\"微信模式\"后，管理员设全员禁言："
               << ok(qqGroup.switchPolicy(std::make_shared<WeChatPolicyFH>()))
-              << "，执行结果：" << ok(qqGroup.setAllMute(admin, true))
+              << "，执行结果：" << okDenied(qqGroup.setAllMute(admin, true))
               << "（应失败）\n";
     std::cout << "    QQ 群切回\"QQ 模式\"后，管理员设全员禁言："
               << ok(qqGroup.switchPolicy(qqPolicy)) << "，执行结果："
@@ -191,7 +297,7 @@ void runAutoScenario() {
     std::cout << "    普通成员撤回自己的消息："
               << ok(qqGroup.recallMessage(member, msgByMember->getId())) << "\n";
     std::cout << "    普通成员撤回群主的消息："
-              << ok(qqGroup.recallMessage(member, msgByOwner->getId()))
+              << okDenied(qqGroup.recallMessage(member, msgByOwner->getId()))
               << "（应失败，只能撤回本人消息）\n";
     std::cout << "    群主撤回自己的消息："
               << ok(qqGroup.recallMessage(owner, msgByOwner->getId())) << "\n";
@@ -204,7 +310,7 @@ void runAutoScenario() {
         std::chrono::system_clock::now() - std::chrono::seconds(limitSec + 1));
     qqGroup.sendMessage(owner, staleMsg);
     std::cout << "    群主撤回 " << (limitSec + 1) << " 秒前发送的消息："
-              << ok(qqGroup.recallMessage(owner, staleMsg->getId()))
+              << okDenied(qqGroup.recallMessage(owner, staleMsg->getId()))
               << "（应失败：超出 " << limitSec << " 秒撤回窗口）\n";
     auto freshMsg = makeMessage(owner, "刚刚发送的消息");
     qqGroup.sendMessage(owner, freshMsg);
@@ -216,7 +322,7 @@ void runAutoScenario() {
     std::cout << "    群主任命普通成员为管理员："
               << ok(qqGroup.setAdmin(owner, member, true)) << "\n";
     std::cout << "    普通成员（已管理员）无权再任命别人："
-              << ok(qqGroup.setAdmin(member, outsider, true)) << "（应失败）\n";
+              << okDenied(qqGroup.setAdmin(member, outsider, true)) << "（应失败）\n";
     std::cout << "    群主将群转让给原管理员："
               << ok(qqGroup.transferOwner(owner, admin)) << "\n";
 
@@ -251,13 +357,13 @@ void runAutoPlatformScenario() {
     std::cout << "     开通微博（QQ 同号即具资格）："
               << ok(activation.activate(*xiaoming, PlatformKindFH::Weibo)) << "\n";
     std::cout << "     未绑定微信号就开通微信："
-              << ok(activation.activate(*xiaoming, PlatformKindFH::WeChat)) << "（应失败）\n";
+              << okDenied(activation.activate(*xiaoming, PlatformKindFH::WeChat)) << "（应失败）\n";
     std::cout << "     为小明绑定微信号 wx-88-0001："
               << ok(registry.bindWeChat(xiaoming, "wx-88-0001")) << "\n";
     std::cout << "     绑定后开通微信："
               << ok(activation.activate(*xiaoming, PlatformKindFH::WeChat)) << "\n";
     std::cout << "     重复开通 QQ（幂等）："
-              << ok(activation.activate(*xiaoming, PlatformKindFH::QQ)) << "（应失败）\n";
+              << okDenied(activation.activate(*xiaoming, PlatformKindFH::QQ)) << "（应失败）\n";
     std::cout << "     " << xiaoming->getNickname() << " 已开通：";
     for (PlatformKindFH p : xiaoming->activatedPlatforms())
         std::cout << toZhName(p) << " ";
@@ -270,13 +376,13 @@ void runAutoPlatformScenario() {
 
     std::cout << "\n[B4] 登录联动：登录一个服务 → 其余已开通服务自动登录\n";
     std::cout << "     小红尚未开通服务，登录 QQ："
-              << ok(login.login(*xiaohong, PlatformKindFH::QQ)) << "（应失败）\n";
+              << okDenied(login.login(*xiaohong, PlatformKindFH::QQ)) << "（应失败）\n";
     std::cout << "     小明登录 QQ：" << ok(login.login(*xiaoming, PlatformKindFH::QQ)) << "\n";
     printOnlinePlatforms("小明", login.onlinePlatforms(*xiaoming));
 
     std::cout << "\n[B5] 单服务退出与取消开通规则\n";
     std::cout << "     在线状态直接取消开通微博："
-              << ok(activation.deactivate(*xiaoming, PlatformKindFH::Weibo))
+              << okDenied(activation.deactivate(*xiaoming, PlatformKindFH::Weibo))
               << "（应失败，须先退出登录）\n";
     std::cout << "     退出微博登录："
               << ok(login.logout(*xiaoming, PlatformKindFH::Weibo)) << "\n";
@@ -310,7 +416,7 @@ void runAutoSocialScenario() {
     std::cout << "     小明关注路人乙（微博单向）：" 
               << ok(friends.follow(*xiaoming, *lurenB)) << "\n";
     std::cout << "     QQ 好友关系不影响微博：" 
-              << ok(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::Weibo)) 
+              << okDenied(friends.isFriend(*xiaoming, *xiaohong, PlatformKindFH::Weibo))
               << "（应失败）\n";
 
     std::cout << "\n[C2] 共同好友查询\n";
@@ -336,15 +442,15 @@ void runAutoSocialScenario() {
                                                         PlatformKindFH::QQ, PlatformKindFH::WeChat))
               << "\n";
     std::cout << "     重复推荐添加（已是微信好友）："
-              << ok(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
-                                                        PlatformKindFH::QQ, PlatformKindFH::WeChat))
+              << okDenied(friends.addFriendFromRecommendation(*xiaoming, *lurenB,
+                                                              PlatformKindFH::QQ, PlatformKindFH::WeChat))
               << "（应失败：已是好友）\n";
 
     std::cout << "\n[C4] 群注册表与预置官方群\n";
     std::cout << "     小明申请加入 QQ 群 1001：" 
               << ok(groups.joinGroup(*xiaoming, PlatformKindFH::QQ, "1001")) << "\n";
-    std::cout << "     小明申请加入微信群 1003：" 
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003")) 
+    std::cout << "     小明申请加入微信群 1003："
+              << okDenied(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
               << "（应失败，微信群只能推荐加入）\n";
     std::cout << "     小明自建微信群：" 
               << ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")) << "\n";
@@ -430,7 +536,7 @@ void runAutoMessageScenario() {
               << " / "
               << ok(groups.joinGroup(*xiaoming, PlatformKindFH::Weibo, "1005")) << "\n";
     std::cout << "     小明直接申请加入微信群 1003："
-              << ok(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
+              << okDenied(groups.joinGroup(*xiaoming, PlatformKindFH::WeChat, "1003"))
               << "（应失败：微信群只能推荐加入）\n";
     std::cout << "     小明自建微信群“家人群”（群号 1007）："
               << ok(groups.createGroup(*xiaoming, PlatformKindFH::WeChat, "家人群")) << "\n";
@@ -444,16 +550,16 @@ void runAutoMessageScenario() {
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::QQ, "1001",
                                            MessageKindFH::DOCUMENT, "架构图.pdf")) << "\n";
     std::cout << "     小明在微信群 1007 发送文件：" 
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
-                                           MessageKindFH::DOCUMENT, "合同.docx")) 
+              << okDenied(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
+                                                 MessageKindFH::DOCUMENT, "合同.docx"))
               << "（应失败，微信群禁文件）\n";
     std::cout << "     小明在微信群 1007 发送图片：" 
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::WeChat, "1007",
                                            MessageKindFH::IMAGE, "风景.jpg")) 
               << "（微信群允许图片）\n";
     std::cout << "     小明在微博群 1005 发送图片：" 
-              << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
-                                           MessageKindFH::IMAGE, "风景.jpg")) 
+              << okDenied(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
+                                                 MessageKindFH::IMAGE, "风景.jpg"))
               << "（应失败，微博仅支持文本/表情）\n";
     std::cout << "     小明在微博群 1005 发送文本：" 
               << ok(groups.sendGroupMessage(*xiaoming, PlatformKindFH::Weibo, "1005",
@@ -464,9 +570,9 @@ void runAutoMessageScenario() {
     std::cout << "     小红在 QQ 群引用回复：" 
               << ok(groups.sendGroupMessage(*xiaohong, PlatformKindFH::QQ, "1001",
                                            MessageKindFH::TEXT, "收到", true)) << "\n";
-    std::cout << "     小红在微博群引用回复：" 
-              << ok(groups.sendGroupMessage(*xiaohong, PlatformKindFH::Weibo, "1005",
-                                           MessageKindFH::TEXT, "收到", true)) 
+    std::cout << "     小红在微博群引用回复："
+              << okDenied(groups.sendGroupMessage(*xiaohong, PlatformKindFH::Weibo, "1005",
+                                                 MessageKindFH::TEXT, "收到", true))
               << "（应失败，微博不支持引用）\n";
 
     std::cout << "\n[D3] 文本长度限制\n";
@@ -519,11 +625,46 @@ void runAutoMessageScenario() {
     std::cout << "======== 阶段 D 自动演示结束 ========\n";
 }
 
+// 只运行指定阶段，便于答辩时按需演示单段
+bool runDemoScenario(char stage) {
+    initDemoOutput();
+    switch (std::toupper(static_cast<unsigned char>(stage))) {
+        case 'A': runAutoScenario();         return true;
+        case 'B': runAutoPlatformScenario(); return true;
+        case 'C': runAutoSocialScenario();   return true;
+        case 'D': runAutoMessageScenario();  return true;
+        default:  return false;
+    }
+}
+
 void runAllDemoScenarios() {
+    initDemoOutput();
     runAutoScenario();
+    pauseBetweenScenarios();
     runAutoPlatformScenario();
+    pauseBetweenScenarios();
     runAutoSocialScenario();
+    pauseBetweenScenarios();
     runAutoMessageScenario();
+}
+
+// 演示自检汇总：把每处校验的结果与预期对比，给出一个干净的结论
+int printDemoSummary() {
+    const int abnormal = g_summary.unexpectedFail + g_summary.unexpectedPass;
+    std::cout << "\n======== 演示自检汇总 ========\n";
+    std::cout << "  校验项 " << g_summary.total << " 项：成功 " << g_summary.success
+              << "，失败 " << g_summary.failure
+              << "（其中标注「应失败」的平台规则 / 权限校验 " << g_summary.expectedFail << " 项）\n";
+    if (abnormal == 0) {
+        std::cout << "  " << paint("自检结果：全部符合预期", kColorOk) << "\n";
+    } else {
+        std::cout << "  "
+                  << paint("自检结果：" + std::to_string(abnormal) + " 项与预期不符", kColorBad)
+                  << "\n";
+        std::cout << "    · 应成功却失败：" << g_summary.unexpectedFail << " 项\n";
+        std::cout << "    · 应失败却成功：" << g_summary.unexpectedPass << " 项\n";
+    }
+    return abnormal;
 }
 
 } // namespace DemoRunner
