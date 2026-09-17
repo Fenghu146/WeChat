@@ -41,6 +41,7 @@
 #include <conio.h>
 #include <windows.h>
 #else
+#include <termios.h>
 #include <unistd.h>
 #endif
 
@@ -113,6 +114,34 @@ std::string trimCopy(std::string s) {
     return s.substr(b, e - b + 1);
 }
 
+#ifndef _WIN32
+// POSIX：把终端临时切到「非规范模式 + 关闭回显」，实现真正的单键读取。
+// 默认规范模式下终端要等到回车才把字节交给程序（并回显），这正是
+// “按了数字没反应、要再按回车”的原因。仅清除 ICANON/ECHO，保留 ISIG，
+// 因此 Ctrl+C 仍然有效；非终端（管道/重定向）不做任何改动；析构时恢复。
+class RawTerminalGuard {
+public:
+    RawTerminalGuard() {
+        if (!isatty(STDIN_FILENO)) return;
+        if (tcgetattr(STDIN_FILENO, &saved_) != 0) return;
+        struct termios raw = saved_;
+        raw.c_lflag &= ~(ICANON | ECHO);
+        raw.c_cc[VMIN] = 1;
+        raw.c_cc[VTIME] = 0;
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) active_ = true;
+    }
+    ~RawTerminalGuard() {
+        if (active_) tcsetattr(STDIN_FILENO, TCSANOW, &saved_);
+    }
+    RawTerminalGuard(const RawTerminalGuard&) = delete;
+    RawTerminalGuard& operator=(const RawTerminalGuard&) = delete;
+
+private:
+    struct termios saved_{};
+    bool active_ = false;
+};
+#endif
+
 // 单键输入：直接返回用户按下的按键（小写）；方向键/回车/Esc 返回 0（忽略）
 char waitKey() {
 #ifdef _WIN32
@@ -133,6 +162,7 @@ char waitKey() {
     if (c == '\r' || c == '\n' || c == 27) return 0;
     return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 #else
+    RawTerminalGuard guard;  // 终端下无需回车；管道/重定向下不做改动
     char c = 0;
     if (std::fread(&c, 1, 1, stdin) != 1) return 0;
     if (c == '\r' || c == '\n' || c == 27) return 0;
