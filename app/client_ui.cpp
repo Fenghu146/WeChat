@@ -8,9 +8,9 @@
 //   会话层(A)  ：本地正式群（QQ/微信群策略）的完整群管理：发消息、
 //               撤回、邀请、踢人、禁言、全员禁言、任命/撤销管理员、
 //               改群名、公告、转让群主、切换管理模式、解散群；
-//   群目录(C/D)：官方群大厅（1001~1006）入群/退群/发不同类型消息
-//               （类型、长度、引用按平台校验），微信禁文件、微博
-//               仅文本/表情等差异可直接体验；
+//   群目录(C/D)：官方群大厅（1001~1006）入群/退群/推荐入群/发不同
+//               类型消息（类型、长度、引用按平台校验），微信禁文件、
+//               微博仅文本/表情等差异可直接体验；自建群群主可解散/转让；
 //   讨论组(C)  ：QQ 临时讨论组（任何成员可邀请、成员自由退、仅发
 //               起人可解散）；
 //   通讯录(C)  ：QQ/微信双向好友 + 微博单向关注，按平台隔离。
@@ -386,6 +386,9 @@ void seedWorld() {
                                       "湖北·武汉", 2021);
     g.registry.bindWeChat(xm, "wx-88-0001");
     g.registry.bindWeChat(xh, "wx-88-0002");
+    // 路人乙也绑定微信：作为预置微信群「可被推荐入群」的对象（路人丙保持
+    // 未绑定，用于演示「未绑定微信」状态）。
+    g.registry.bindWeChat(lb, "wx-88-0003");
     // 说明：演示环境默认已为每个自然人生效 QQ/微博服务（可随时在账号中心取消），
     // 微信需先绑定再手动开通 —— 开通/登录联动规则在“账号中心”验证。
     for (const auto& p : {xm, xh, lb, lc}) {
@@ -657,8 +660,8 @@ bool switchActorInGroup(const LocalSlot& live) {
     return true;
 }
 
-// —— 正式群“更多操作”二级菜单（全部数字键：0 返回会话，8 返回会话列表）——
-// 返回 false 表示退出本会话（回到会话列表）
+// —— 正式群“更多操作”二级菜单（全部数字键，0 返回会话主界面）——
+// 返回 true 表示退回会话主界面；返回 false 表示退出本会话（回到会话列表）。
 bool runLocalMore(LocalSlot& live) {
     GroupFH& grp = *live.group;
     for (;;) {
@@ -677,16 +680,16 @@ bool runLocalMore(LocalSlot& live) {
                 {'3', "解散群"},
                 {'4', "退出本群"},
                 {'5', "群设置（邀请开关/撤回窗口）"},
-                {'6', "以其他成员身份操作"},
-                {'7', "本页操作帮助"},
-                {'8', "返回会话列表"},
+                {'6', "群公告"},
+                {'7', "改群名"},
+                {'8', "以其他成员身份操作"},
+                {'9', "本页操作帮助"},
                 {'0', "返回会话"}});
         present(s);
         const char k = waitKey();
 
-        if (k == '0') return true;
-        if (k == '8') return false;
-        if (k == '7') {
+        if (k == '0') return true;  // 返回会话主界面
+        if (k == '9') {
             fh_ui::Screen h("更多操作 · 说明（阶段 A / 平台差异）");
             h.section("各操作的含义");
             h.kv("切换管理模式",
@@ -696,6 +699,8 @@ bool runLocalMore(LocalSlot& live) {
             h.kv("解散群", "仅群主可操作；解散后成员清空、所有操作被拒绝");
             h.kv("退出本群", "普通成员/管理员主动退群；群主须先转让或解散");
             h.kv("群设置", "邀请开关（QQ 概念）与撤回时间窗，需管理员及以上身份");
+            h.kv("群公告", "发布/更新群公告，需管理员及以上身份");
+            h.kv("改群名", "修改群名，需管理员及以上身份");
             h.kv("切换身份", "以群内其他成员身份操作，便于验证不同角色的权限差异");
             h.prompt("按任意键返回：");
             h.flush();
@@ -783,7 +788,33 @@ bool runLocalMore(LocalSlot& live) {
         case '5':
             runGroupSettings(live);
             continue;
-        case '6':
+        case '6': {  // 发布 / 更新群公告
+            auto text = askText("  新群公告内容（直接回车取消）> ");
+            if (!text) {
+                noticeInfo("已取消发布公告");
+                continue;
+            }
+            busy("公告发布");
+            if (grp.publishAnnouncement(meUser, *text))
+                noticeOK("群公告已更新。");
+            else
+                noticeFail("发布公告需要管理员及以上身份（或群已解散）。");
+            continue;
+        }
+        case '7': {  // 修改群名
+            auto name = askText("  新群名（直接回车取消）> ");
+            if (!name) {
+                noticeInfo("已取消改名");
+                continue;
+            }
+            busy("群名修改");
+            if (grp.editGroup(meUser, *name))
+                noticeOK("群名已改为「" + *name + "」。");
+            else
+                noticeFail("修改群名需要管理员及以上身份（或群已解散）。");
+            continue;
+        }
+        case '8':
             if (switchActorInGroup(live)) return true;  // 身份生效，回会话主界面
             continue;
         default:
@@ -868,28 +899,26 @@ void runLocalChat(const LocalSlot& slot) {
                    (m->isRecalled() ? "  ［已撤回］" : ""));
         }
 
-        // —— 操作按钮区：数字键为功能键，0 进入“更多操作” ——
+        // —— 操作按钮区：数字键为功能键；0 = 返回会话列表（与全局约定一致），
+        //     群公告/改群名等低频管理项收进 [8] 更多操作 ——
         s.blank();
         s.section("可用操作");
         if (!meUser) {
             s.text("  提示：当前管理模式为「" + platCn(live.platform) +
                    "」，但你没有该平台账号，仅可浏览本群。");
-            s.menu({{'0', "更多操作（含返回会话列表）"}});
+            s.menu({{'0', "返回会话列表"}});
         } else {
             s.menu({{'1', "发送消息"}, {'2', "撤回消息"}, {'3', "邀请成员"},
                     {'4', "踢出成员"}, {'5', "禁言/解禁"}, {'6', "全员禁言"},
-                    {'7', "任命管理员"}, {'8', "群公告"}, {'9', "改群名"},
-                    {'0', "更多操作"}},
+                    {'7', "任命管理员"}, {'8', "更多操作"},
+                    {'0', "返回会话列表"}},
                    5);  // 每行 5 项，与原版一致
         }
         present(s);
         const char k = waitKey();
-        if (!meUser) {  // 无账号时只保留“更多操作”（其中含返回会话列表）
-            if (k == '0') {
-                if (!runLocalMore(live)) return;
-            } else if (k != 0) {
-                noticeFail("无效按键：" + std::string(1, k));
-            }
+        if (!meUser) {  // 无账号时仅可浏览，0 返回会话列表
+            if (k == '0') return;
+            if (k != 0) noticeFail("无效按键：" + std::string(1, k));
             continue;
         }
 
@@ -1051,36 +1080,13 @@ void runLocalChat(const LocalSlot& slot) {
                 noticeFail("仅群主可任命/撤销管理员，或目标已是目标状态。");
             continue;
         }
-        case '8': {  // 发布 / 更新公告
-            auto text = askText("  新群公告内容（直接回车取消）> ");
-            if (!text) {
-                noticeInfo("已取消发布公告");
-                continue;
-            }
-            busy("公告发布");
-            if (g.publishAnnouncement(meUser, *text))
-                noticeOK("群公告已更新。");
-            else
-                noticeFail("发布公告需要管理员及以上身份（或群已解散）。");
-            continue;
-        }
-        case '9': {  // 修改群名
-            auto name = askText("  新群名（直接回车取消）> ");
-            if (!name) {
-                noticeInfo("已取消改名");
-                continue;
-            }
-            busy("群名修改");
-            if (g.editGroup(meUser, *name))
-                noticeOK("群名已改为「" + *name + "」。");
-            else
-                noticeFail("修改群名需要管理员及以上身份（或群已解散）。");
-            continue;
-        }
-        case '0': {  // 更多操作：切换管理模式 / 转让 / 解散 / 退群 / 群设置 / 切换身份
+        case '8': {  // 更多操作：切换管理模式 / 转让 / 解散 / 退群 /
+                     // 群设置 / 群公告 / 改群名 / 切换身份
             if (!runLocalMore(live)) return;
             continue;
         }
+        case '0':  // 返回会话列表（一级返回，与全局「0 = 返回上级」一致）
+            return;
         default:
             if (k != 0) noticeFail("无效按键：" + std::string(1, k));
             continue;
@@ -1142,6 +1148,7 @@ void runOfficialChat(const std::string& groupId) {
         if (hasAcct)
             for (const auto& id : info->memberIds)
                 if (id == myId) inGroup = true;
+        const bool isOwner = g.official.isOwnerOf(*g.me, groupId);
 
         fh_ui::Screen s("群聊天：" + info->name + "（" + platCn(pl) +
                         " 官方/自建群）");
@@ -1195,9 +1202,16 @@ void runOfficialChat(const std::string& groupId) {
 
         s.blank();
         s.section("可用操作");
-        s.menu({{'1', "发送消息"}, {'2', "加入本群"}, {'3', "退出本群"},
-                {'0', "返回"}},
-               4);  // 保持一行，与原版一致
+        std::vector<fh_ui::MenuItem> ops{
+            {'1', "发送消息"}, {'2', "加入本群"}, {'3', "退出本群"}};
+        if (pl == PlatformKindFH::WeChat)  // 微信群只能推荐加入 → 补推荐入口
+            ops.push_back({'4', "推荐好友入群"});
+        if (isOwner) {  // 自建群群主专属：解散 / 转让
+            ops.push_back({'5', "解散本群"});
+            ops.push_back({'6', "转让群主"});
+        }
+        ops.push_back({'0', "返回"});
+        s.menu(ops, static_cast<int>(ops.size()));
         present(s);
         const char k = waitKey();
 
@@ -1276,10 +1290,94 @@ void runOfficialChat(const std::string& groupId) {
         }
         case '3': {  // 退出本群
             busy("退群处理");
-            if (g.official.leaveGroup(*g.me, groupId))
+            if (g.official.leaveGroup(*g.me, groupId)) {
                 noticeOK("已退出「" + info->name + "」。");
+                return;  // 退群后回到大厅/列表
+            }
+            if (isOwner)
+                noticeFail("群主不能直接退群：请先转让群主（[6]）或解散本群（[5]）。");
             else
                 noticeFail("退群失败：可能你并不在该群。");
+            continue;
+        }
+        case '4': {  // 推荐好友入群（仅微信群：由群内成员推荐）
+            if (pl != PlatformKindFH::WeChat) {
+                noticeFail("仅微信群需「推荐加入」，QQ/微博群请按 [2] 申请加入。");
+                continue;
+            }
+            if (!inGroup) {
+                noticeFail("你不在本群：须先由群内成员推荐你入群，之后才能推荐他人。");
+                continue;
+            }
+            auto target = pickProfile(
+                true, PlatformKindFH::WeChat, "选择要推荐入群的好友",
+                [&](const ProfilePtr& p) {
+                    const std::string id =
+                        p->platformAccountId(PlatformKindFH::WeChat);
+                    const bool already =
+                        std::find(info->memberIds.begin(), info->memberIds.end(),
+                                  id) != info->memberIds.end();
+                    return already ? std::string("  ［已在群内］")
+                                   : std::string("  ［可推荐］");
+                });
+            if (!target) continue;
+            busy("推荐入群");
+            if (g.official.inviteIntoGroup(*g.me, *target, groupId))
+                noticeOK("已推荐 " + target->getNickname() + " 进入「" +
+                         info->name + "」。");
+            else
+                noticeFail("推荐失败：对方须已绑定微信、不在群内且群未满员。");
+            continue;
+        }
+        case '5': {  // 解散本群（仅群主）
+            fh_ui::Screen c("解散本群 · 二次确认");
+            c.text("  解散后本群将从群列表移除、不可恢复。确认解散「" +
+                   info->name + "」？");
+            c.menu({{'y', "确认解散"}, {'n', "取消"}});
+            c.prompt("请按键选择：");
+            c.flush();
+            if (waitKey() != 'y') {
+                noticeInfo("已取消。");
+                continue;
+            }
+            busy("解散处理");
+            if (g.official.disbandGroup(*g.me, groupId)) {
+                noticeOK("已解散「" + info->name + "」，该群已从群列表移除。");
+                return;
+            }
+            noticeFail("解散失败：仅群主可解散自建群。");
+            continue;
+        }
+        case '6': {  // 转让群主（仅群主）
+            std::vector<ProfilePtr> members;
+            std::vector<std::string> labels;
+            for (const auto& id : info->memberIds) {
+                if (id == myId) continue;
+                for (const auto& p : g.people)
+                    if (p->platformAccountId(pl) == id) {
+                        members.push_back(p);
+                        labels.push_back(p->getNickname() + "（" + id + "）");
+                        break;
+                    }
+            }
+            if (members.empty()) {
+                noticeFail("群内没有其他成员可转让。");
+                continue;
+            }
+            const int idx =
+                chooseByLabels("选择新群主（转让后你降为普通成员）", labels);
+            if (idx < 0) {
+                noticeInfo("已取消。");
+                continue;
+            }
+            busy("转让处理");
+            if (g.official.transferOwner(
+                    *g.me, *members[static_cast<std::size_t>(idx)], groupId))
+                noticeOK("已把群主转让给 " +
+                         members[static_cast<std::size_t>(idx)]->getNickname() +
+                         "。");
+            else
+                noticeFail("转让失败：仅群主可转让，且目标须在群内。");
             continue;
         }
         case '0':
@@ -1613,6 +1711,24 @@ std::optional<PlatformKindFH> askPlatformService() {
     }
 }
 
+// 按当前状态给出「下一步该按哪个键」，把开通 → 登录 → 退出串成一条明线。
+std::string accountNextStep() {
+    const auto& p = g.me;
+    for (const auto pl :
+         {PlatformKindFH::WeChat, PlatformKindFH::QQ, PlatformKindFH::Weibo})
+        if (p->hasPlatformAccount(pl) && !p->isActivated(pl))
+            return "按 [1] 开通" + platCn(pl) + "服务";
+    for (const auto pl :
+         {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo})
+        if (p->isActivated(pl) && !p->isOnline(pl))
+            return "按 [4] 登录" + platCn(pl) + "（其余已开通服务会自动登录）";
+    for (const auto pl :
+         {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo})
+        if (p->isOnline(pl))
+            return "按 [5] 退出单服务 / [6] 退出全部";
+    return "按 [1] 开通服务";
+}
+
 void runServiceCenter() {
     for (;;) {
         fh_ui::Screen s("账号中心（阶段 B · 多产品体系）");
@@ -1624,6 +1740,7 @@ void runServiceCenter() {
         s.item("任一服务登录后，其余已开通服务自动登录");
         s.item("状态口径：有账号 → 已开通（自选启用）→ 在线；三者互相独立，"
                "绑定微信号 ≠ 已开通微信");
+        s.kv("建议下一步", accountNextStep());
 
         s.blank();
         s.section("可用操作");
@@ -1952,6 +2069,19 @@ void runContacts() {
                 d == 0 ? PlatformKindFH::QQ : PlatformKindFH::WeChat;
             const PlatformKindFH to =
                 d == 0 ? PlatformKindFH::WeChat : PlatformKindFH::QQ;
+            // 入口校验（任务书 6.(3)）：跨服务推荐要求本人已开通「目标」服务，
+            // 且具备目标平台账号。不满足时直接拦截并指明去处，避免进入
+            // 「暂无可推荐」诊断屏后看到“候选 N 人”产生自相矛盾的误解。
+            if (!g.me->hasPlatformAccount(to)) {
+                noticeFail(std::string("你还没有") + toZhName(to) +
+                           "账号，请先到【账号中心】[3] 绑定后再使用本方向推荐。");
+                continue;
+            }
+            if (!g.me->isActivated(to)) {
+                noticeFail(std::string("请先在【账号中心】[1] 开通「") +
+                           toZhName(to) + "」服务，再使用跨服务推荐。");
+                continue;
+            }
             busy("推荐计算");
             const auto rec = g.friends.recommendFriendsFrom(
                 *g.me, g.registry, from, to);
@@ -1959,10 +2089,19 @@ void runContacts() {
                 // 无候选时逐条回显前置条件与当前状态，避免用户以为功能损坏
                 const std::size_t fromFriendCount =
                     g.friends.friendIds(*g.me, from).size();
-                std::size_t withTarget = 0;  // 候选：已绑定目标平台账号的人
-                std::size_t notYetTarget = 0;  // 其中尚非目标平台好友的人
-                for (const auto& p : g.people) {
-                    if (p == g.me || !p->hasPlatformAccount(to)) continue;
+                // ③④ 一律以「你的来源平台好友」为基数（交集语义）：
+                // 只有来源好友里已绑定目标平台的人，才可能被推荐。
+                std::size_t withTarget = 0;    // 其中已绑定目标平台账号的人
+                std::size_t notYetTarget = 0;  // 其中尚不是目标平台好友的人
+                for (const std::string& fid :
+                     g.friends.friendIds(*g.me, from)) {
+                    const UserProfileFH* p = nullptr;
+                    for (const auto& q : g.people)
+                        if (q->platformAccountId(from) == fid) {
+                            p = q.get();
+                            break;
+                        }
+                    if (!p || !p->hasPlatformAccount(to)) continue;
                     ++withTarget;
                     if (!g.friends.isFriend(*g.me, *p, to)) ++notYetTarget;
                 }
@@ -1980,11 +2119,12 @@ void runContacts() {
                        std::to_string(fromFriendCount) + " 人" +
                        (fromFriendCount ? std::string()
                                         : std::string("（【通讯录】[1] 先加好友）")));
-                r.item("③ 对方已绑定" + toCn + "账号：候选 " +
+                r.item("③ 你的" + fromCn + "好友中已绑定" + toCn + "账号：" +
                        std::to_string(withTarget) + " 人");
-                r.item("④ 对方尚不是你的" + toCn + "好友：其中 " +
-                       std::to_string(notYetTarget) + " 人满足");
+                r.item("④ 其中尚不是你的" + toCn + "好友：" +
+                       std::to_string(notYetTarget) + " 人");
                 r.blank();
+                r.text("  推荐名单 = 上述四条件的交集；任一为 0，可推荐即 0 人。");
                 r.text("  建议顺序：账号中心开通" + toCn + " → 通讯录加 " + fromCn +
                        "好友 → 回到 [9] 选择本方向。");
                 present(r, "按任意键返回：");
@@ -2259,9 +2399,9 @@ bool runAccountGate() {
                 {true, "④ 会话与社交（阶段 C）"},
                 {false, "【我的会话】进入任一已加入会话开始操作；"
                         "【通讯录】管理 QQ/微信双向好友与微博单向关注"},
-                {false, "全部操作项均为数字键（0 = 返回上级 / 更多操作）；"
-                        "界面底部状态条会显示每一步成功或失败的原因，"
-                        "每次操作后界面自动重绘"},
+                {false, "全部操作项均为数字键（0 = 返回上级；正式群会话里"
+                        "[8] 为“更多操作”）；界面底部状态条会显示每一步成功或"
+                        "失败的原因，每次操作后界面自动重绘"},
             });
             continue;
         }
@@ -2293,9 +2433,10 @@ void runHelp() {
                   "管理员设全员禁言（QQ 可、微信仅群主）；禁言后普通成员发言失败；"
                   "撤回时间窗；转让群主后原群主仅剩成员权限；切模式成员不丢；解散后一切被拒"},
         HelpEntry{false,
-                  "会话内按 [0] 进入“更多操作”：切换管理模式 / 转让群主 / 解散群 / "
-                  "退出本群（群主不能直接退群，须先转让或解散）/ 群设置（改邀请开关、"
-                  "把撤回窗口调小以复现“超时不可撤回”）/ 以其他成员身份操作"},
+                  "会话内 [0] 直接返回会话列表，[8] 进入“更多操作”：切换管理模式 / "
+                  "转让群主 / 解散群 / 退出本群（群主不能直接退群，须先转让或解散）/ "
+                  "群设置（改邀请开关、把撤回窗口调小以复现“超时不可撤回”）/ 群公告 / "
+                  "改群名 / 以其他成员身份操作"},
         HelpEntry{true, "B · 多产品体系（账号中心）"},
         HelpEntry{false,
                   "先分清三层：有账号（身份）→ 已开通（你自选启用，任务书第 4 点）"
@@ -2308,7 +2449,12 @@ void runHelp() {
         HelpEntry{false, "微信：先绑定 → 开通 → 登录；重复开通 / 绑定失败均有提示"},
         HelpEntry{true, "C · 社交（通讯录 / 大厅 / 讨论组）"},
         HelpEntry{false, "QQ/微信双向好友、微博单向关注；删除 QQ 好友不影响微信（平台隔离）"},
-        HelpEntry{false, "加入官方群 / 自建官方群；未绑微信者不能入微信群"},
+        HelpEntry{false,
+                  "加入官方群 / 自建官方群；微信群只能推荐加入：会话内 [4] 推荐好友入群"
+                  "（推荐者须已在群内，被推荐者须已绑定微信）"},
+        HelpEntry{false,
+                  "自建群群主可 [6] 转让群主、[5] 解散本群；群主不能直接退群，"
+                  "须先转让或解散"},
         HelpEntry{false, "QQ 临时讨论组：成员可互邀、自由退、仅发起人可解散"},
         HelpEntry{true, "D · 消息平台差异（官方群聊天）"},
         HelpEntry{false,
@@ -2382,6 +2528,24 @@ void loadWorldFromDisk() {
         noticeInfo("未发现存档：本次运行数据将在退出时写入存档文件。");
 }
 
+// 预置微信群初始成员注入（演示环境）。
+// 库层预置群默认无成员，而微信群「只能推荐加入」且推荐者须已在群内，
+// 于是无人可推荐 → 群永久空置（死群）。此处为「空成员」的预置微信群补齐
+// 演示成员；仅对空群生效，因此用户手动退群后重启不会被强行加回。
+void backfillPredefinedGroups() {
+    auto wxIdOf = [](const std::string& nick) -> std::string {
+        for (const auto& p : g.people)
+            if (p->getNickname() == nick && p->hasWeChatAccount())
+                return p->getWeChatId();
+        return std::string();
+    };
+    const std::string xm = wxIdOf("小明");
+    const std::string xh = wxIdOf("小红");
+    const std::string lb = wxIdOf("路人乙");
+    g.official.ensurePredefinedMembers("1003", {xm, xh});  // 家庭群
+    g.official.ensurePredefinedMembers("1004", {xh, lb});  // 同事群
+}
+
 }  // namespace
 
 namespace fh_client {
@@ -2390,6 +2554,9 @@ int runClientUi() {
     initUiConsole();
     seedWorld();
     loadWorldFromDisk();  // 任务书 6.(1)：启动时从文件加载到内存
+    // 加载之后再注入预置微信群初始成员：存档载入会整体替换群目录，
+    // 故必须在加载后回填，空成员的预置微信群才能真正"活"起来。
+    backfillPredefinedGroups();
     for (;;) {
         if (!runAccountGate()) return 0;
         if (!runWorkspace()) return 0;

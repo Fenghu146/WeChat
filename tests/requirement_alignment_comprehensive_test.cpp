@@ -304,6 +304,12 @@ FH_TEST(Comprehensive_GroupJoinLeaveKickQuery) {
     ids = gr.memberIdsOf("1007");
     FH_CHECK(ids != nullptr && ids->size() == 1);     // 只剩 owner
 
+    // 群主保护：群主不能直接退群，须先转让或解散；非群主不能解散该群
+    FH_CHECK(!gr.leaveGroup(*owner, "1007"));
+    FH_CHECK(!gr.disbandGroup(*m1, "1007"));
+    ids = gr.memberIdsOf("1007");
+    FH_CHECK(ids != nullptr && ids->size() == 1);     // 群主仍在群内
+
     // --- 微信群：推荐加入 + 仅群主可踢 ---
     FH_CHECK(gr.createGroup(*wxO, PlatformKindFH::WeChat, "微信踢人测试群"));  // 1008
     FH_CHECK(gr.inviteIntoGroup(*wxO, *wxM, "1008"));

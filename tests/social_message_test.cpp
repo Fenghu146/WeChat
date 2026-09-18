@@ -102,6 +102,16 @@ FH_TEST(PredefinedOfficialGroupsExistOnEveryPlatform) {
     const GroupInfoFH* g = gr.findGroup("1003");
     FH_CHECK(g != nullptr);
     if (g) FH_CHECK_EQ(g->platform, PlatformKindFH::WeChat);
+
+    // 预置群初始成员注入：仅对空成员的预置群生效，且幂等（非空后不再动作）
+    FH_CHECK(gr.ensurePredefinedMembers("1003", {"wx-88-0001", "wx-88-0002"}));
+    const auto* ids = gr.memberIdsOf("1003");
+    FH_CHECK(ids != nullptr && ids->size() == 2);
+    FH_CHECK(!gr.ensurePredefinedMembers("1003", {"wx-88-0003"}));  // 非空 → 不动作
+    FH_CHECK(gr.memberIdsOf("1003") != nullptr &&
+             gr.memberIdsOf("1003")->size() == 2);
+    // 非预置群 / 不存在的群：不注入
+    FH_CHECK(!gr.ensurePredefinedMembers("1007", {"wx-88-0001"}));
 }
 
 FH_TEST(JoinGroupGateChecksPlatformAndAccount) {
@@ -132,6 +142,17 @@ FH_TEST(CreateGroupAutoAssignsNumberFrom1007) {
     for (const GroupInfoFH* u : userGroups)
         if (u->groupId == "1007") found1007 = true;
     FH_CHECK(found1007);
+
+    // 群主退群保护 / 解散 / 转让（与聚合根 GroupFH 口径一致）
+    FH_CHECK(!gr.leaveGroup(*p.xm, "1007"));       // 群主不可直接退群
+    FH_CHECK(!gr.disbandGroup(*p.luren, "1007"));  // 非群主不可解散
+    FH_CHECK(!gr.disbandGroup(*p.xm, "1001"));     // 预置群不可解散
+    FH_CHECK(!gr.transferOwner(*p.xm, *p.luren, "1007"));  // 目标须在群内
+    FH_CHECK(gr.joinGroup(*p.hong, PlatformKindFH::QQ, "1007"));
+    FH_CHECK(gr.transferOwner(*p.xm, *p.hong, "1007"));    // 群主转让成功
+    FH_CHECK(!gr.disbandGroup(*p.xm, "1007"));     // 已非群主，不可解散
+    FH_CHECK(gr.disbandGroup(*p.hong, "1007"));    // 新群主可解散
+    FH_CHECK(gr.findGroup("1007") == nullptr);     // 解散后从目录移除
 }
 
 // ---------------- 群消息扩展（阶段 D） ----------------

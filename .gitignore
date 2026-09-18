@@ -9,5 +9,6 @@ demo_save_*.dat
 .DS_Store
 Testing/
 .codebuddy/
+.commandcode/
 docs/linux-advantages.html
 docs/linux-demo.sh

@@ -23,7 +23,8 @@
 // 类型/长度/引用能力，超过上限淘汰最早记录。
 // 断电保存（任务书 6.(1)、优化(2)）：群成员信息可在容器配置时读
 // 入（setPersistencePath）、析构时写回（saveToFile/loadFromFile）。
-// 官方预置群无群主（ownerId 为空），不受个人管理（不可踢人）。
+// 官方预置群无群主（ownerId 为空）、不可解散；其初始成员由演示环境在
+// 启动加载存档后通过 ensurePredefinedMembers 注入（库层默认仍为空群）。
 // ============================================================
 #include <algorithm>
 #include <chrono>
@@ -147,12 +148,15 @@ public:
         return true;
     }
 
-    // 退出某群
+    // 退出某群。
+    // 群主不能直接退群（须先转让群主或解散群），与聚合根 GroupFH 口径一致，
+    // 避免群处于“无主”状态；预置群 ownerId 为空，不受此限。
     bool leaveGroup(const UserProfileFH& user, const std::string& groupId) {
         GroupInfoFH* g = findMutable(groupId);
         if (!g) return false;
         const std::string memberId =
             user.platformAccountId(g->platform);
+        if (!g->ownerId.empty() && g->ownerId == memberId) return false;
         auto& ids = g->memberIds;
         for (auto it = ids.begin(); it != ids.end(); ++it) {
             if (*it == memberId) {
@@ -162,6 +166,38 @@ public:
         }
         return false;
     }
+
+    // 解散自建群：仅现群主可操作，预置官方群不可解散。
+    // 解散即把该群从群目录移除，此后 findGroup 返回空。
+    bool disbandGroup(const UserProfileFH& owner, const std::string& groupId) {
+        GroupInfoFH* g = findMutable(groupId);
+        if (!g || g->predefined) return false;
+        const std::string opId = owner.platformAccountId(g->platform);
+        if (opId.empty() || g->ownerId.empty() || g->ownerId != opId)
+            return false;
+        groups_.erase(std::remove_if(groups_.begin(), groups_.end(),
+                                     [&](const GroupInfoFH& x) {
+                                         return x.groupId == groupId;
+                                     }),
+                      groups_.end());
+        return true;
+    }
+
+    // 转让群主：仅现群主可操作，目标须已在群内；原群主降为普通成员。
+    bool transferOwner(const UserProfileFH& owner, const UserProfileFH& target,
+                       const std::string& groupId) {
+        GroupInfoFH* g = findMutable(groupId);
+        if (!g || g->predefined) return false;
+        const std::string opId = owner.platformAccountId(g->platform);
+        const std::string tgtId = target.platformAccountId(g->platform);
+        if (opId.empty() || tgtId.empty() || opId == tgtId) return false;
+        if (g->ownerId.empty() || g->ownerId != opId) return false;
+        if (!containsMember(*g, tgtId)) return false;
+        g->ownerId = tgtId;
+        removeId(g->adminIds, tgtId);  // 新任群主不再保留管理员身份
+        return true;
+    }
+
 
     // 群消息扩展（阶段 D）：向群内发一条消息。
     // 校验链：群存在且平台匹配 → 发送者是群成员 → 平台允许该消息类型
@@ -202,6 +238,24 @@ public:
         g.memberIds.push_back(ownerId);
         groups_.push_back(std::move(g));
         return true;
+    }
+
+    // 为预置官方群注入初始成员（演示环境数据注入）：
+    // 仅在群为预置群、且当前无成员时补齐，按人数上限截断；返回是否有变更。
+    // 幂等：非预置群、非空群或空名单均不动作，故用户手动退群后不会被强行加回。
+    bool ensurePredefinedMembers(const std::string& groupId,
+                                 const std::vector<std::string>& memberIds) {
+        GroupInfoFH* g = findMutable(groupId);
+        if (!g || !g->predefined) return false;
+        if (!g->memberIds.empty() || memberIds.empty()) return false;
+        bool changed = false;
+        for (const std::string& id : memberIds) {
+            if (id.empty() || containsMember(*g, id)) continue;
+            if (g->memberIds.size() >= g->maxMembers) break;
+            g->memberIds.push_back(id);
+            changed = true;
+        }
+        return changed;
     }
 
     // ---------- 查询 ----------
