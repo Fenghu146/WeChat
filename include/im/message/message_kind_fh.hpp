@@ -15,6 +15,21 @@ enum class MessageKindFH {
     EMOJI,     // 表情消息
 };
 
+// 消息类型是否在枚举取值范围内。
+// 存档/外部输入里的整数会 static_cast 成 MessageKindFH，越界值必须先拦下，
+// 否则各处的 switch 只能落到 default，出现“看似支持实则未定义”的行为。
+inline bool isValidKindFH(MessageKindFH kind) {
+    switch (kind) {
+        case MessageKindFH::TEXT:
+        case MessageKindFH::IMAGE:
+        case MessageKindFH::DOCUMENT:
+        case MessageKindFH::VOICE:
+        case MessageKindFH::EMOJI:
+            return true;
+    }
+    return false;
+}
+
 // 消息类型中文展示名
 inline const char* kindToZhName(MessageKindFH kind) {
     switch (kind) {

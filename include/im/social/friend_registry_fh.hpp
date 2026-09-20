@@ -20,6 +20,7 @@
 // ============================================================
 #include <algorithm>
 #include <fstream>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -223,9 +224,11 @@ public:
 
     // ---------- 断电保存（好友信息） ----------
     // 行格式：F ␟ 平台 ␟ ownerId ␟ peerId ␟ mutual ␟ 备注(转义)
+    // 采用原子写（先写 .tmp 再替换），写失败时保留原存档并返回 false。
     bool saveToFile(const std::string& path) const {
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        if (!out) return false;
+        persist_util_fh::AtomicWriterFH writer(path);
+        if (!writer.ok()) return false;
+        std::ostream& out = writer.stream();
         for (const FriendShipFH& e : edges_) {
             out << 'F'
                 << persist_util_fh::kFieldSepFH
@@ -239,27 +242,35 @@ public:
                 << persist_util_fh::kFieldSepFH
                 << persist_util_fh::escapeTextFH(e.remark) << '\n';
         }
-        return true;
+        return writer.commit();
     }
 
-    // 从文件恢复好友关系（文件不存在返回 false，保持现状）
+    // 从文件恢复好友关系（文件不存在返回 false，保持现状）。
+    // 容错口径：单行损坏跳过；重复边（同平台同方向）去重；
+    // 若文件有内容却一条都没解析出来（被截断/格式不符），返回 false 并
+    // 保持当前关系，避免用空集合覆盖既有好友数据。
     bool loadFromFile(const std::string& path) {
         std::ifstream in(path, std::ios::binary);
         if (!in) return false;
         std::vector<FriendShipFH> loaded;
         std::string line;
+        bool sawContent = false;
         while (std::getline(in, line)) {
             if (line.empty()) continue;
+            sawContent = true;
             std::vector<std::string> f = persist_util_fh::splitFieldsFH(line);
             if (f.size() < 6 || f[0] != "F") continue;
             FriendShipFH e;
             if (!persist_util_fh::platformFromName(f[1], e.platform)) continue;
+            if (f[2].empty() || f[3].empty()) continue;  // 端点缺失的边无意义
             e.ownerId = f[2];
             e.peerId = f[3];
             e.mutual = f[4] == "1";
             e.remark = persist_util_fh::unescapeTextFH(f[5]);
+            if (containsEdge(loaded, e)) continue;  // 去重，防止重复计数
             loaded.push_back(std::move(e));
         }
+        if (loaded.empty() && sawContent) return false;  // 有内容但全不可用：保持现状
         edges_ = std::move(loaded);
         return true;
     }
@@ -290,9 +301,21 @@ private:
         if (!checkTargets(a, b, platform)) return false;
         const std::string aId = a.platformAccountId(platform);
         const std::string bId = b.platformAccountId(platform);
+        // 反向边可能因存档残缺而单独存在：已有则不再重复插入，
+        // 否则会凭空多出一条重复关系。
+        if (findEdge(bId, aId, platform)) return false;
         edges_.emplace_back(platform, aId, bId, mutual);
         edges_.emplace_back(platform, bId, aId, mutual);
         return true;
+    }
+
+    static bool containsEdge(const std::vector<FriendShipFH>& list,
+                             const FriendShipFH& e) {
+        for (const FriendShipFH& x : list)
+            if (x.platform == e.platform && x.ownerId == e.ownerId &&
+                x.peerId == e.peerId)
+                return true;
+        return false;
     }
 
     const FriendShipFH* findEdge(const std::string& owner,

@@ -14,15 +14,22 @@
 
 bool WeChatPolicyFH::checkPlatformRule(ActionFH action,
                                        const GroupContextFH& context) const {
+    const auto role = context.group->getRole(context.operatorUser);
+    const bool isOwner = role && *role == GroupRoleFH::OWNER;
     switch (action) {
     case ActionFH::INVITE_MEMBER:
         // 微信：仅群主可推荐加入；管理员/普通成员均禁止
         //（任务书：微信群仅有群主为特权账号）
-        return context.group->getRole(context.operatorUser) == GroupRoleFH::OWNER;
+        return isOwner;
     case ActionFH::SET_ALL_MUTE:
         // 微信：仅群主可设置全员禁言（微信群以群主为特权账号）
-        return context.group->getRole(context.operatorUser) == GroupRoleFH::OWNER;
+        return isOwner;
     default:
-        return true;  // 无平台差异的操作一律放行（交给公共步骤裁决）
+        // 无平台差异的操作一律放行（交给公共步骤裁决）。
+        // 注意：EDIT_GROUP / PUBLISH_ANNOUNCEMENT / KICK_MEMBER 等
+        // 被本项目定义为“平台无关的公共操作”（见 abstract_policy_test
+        // 的 CommonActionsEqualAcrossPlatforms），群主口径的踢人限制在
+        // 群注册表层（GroupRegistryFH::kickMember）实现。
+        return true;
     }
 }

@@ -31,6 +31,8 @@
 #include <cstddef>
 #include <exception>
 #include <fstream>
+#include <ostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -241,12 +243,16 @@ public:
     }
 
     // 为预置官方群注入初始成员（演示环境数据注入）：
-    // 仅在群为预置群、且当前无成员时补齐，按人数上限截断；返回是否有变更。
-    // 幂等：非预置群、非空群或空名单均不动作，故用户手动退群后不会被强行加回。
+    // 仅对尚未注入过的预置群、且当前无成员时补齐，按人数上限截断；
+    // 返回是否有变更。
+    // 幂等：非预置群、已注入过的群、空名单均不动作 —— 因此用户手动退群
+    // （哪怕退到空群）后不会被强行加回。这里用“是否注入过”而不是“当前是否
+    // 为空”判断，否则所有人退群后再次启动会把成员重新塞回去。
     bool ensurePredefinedMembers(const std::string& groupId,
                                  const std::vector<std::string>& memberIds) {
         GroupInfoFH* g = findMutable(groupId);
         if (!g || !g->predefined) return false;
+        if (presetInjected_.count(groupId) > 0) return false;
         if (!g->memberIds.empty() || memberIds.empty()) return false;
         bool changed = false;
         for (const std::string& id : memberIds) {
@@ -255,6 +261,7 @@ public:
             g->memberIds.push_back(id);
             changed = true;
         }
+        presetInjected_.insert(groupId);
         return changed;
     }
 
@@ -302,6 +309,8 @@ public:
     }
     // 每个群的聊天记录条数上限（阶段 D 群消息扩展）
     static constexpr std::size_t kMaxChatRecordsFH = 50;
+    // 存档中群人数上限的合法上界（拒绝负数/超界值，防止溢出或超大局）
+    static constexpr std::size_t kMaxGroupMembersFH = 100000;
     // 某群的聊天记录（只读；群不存在返回空）
     const std::vector<GroupChatRecordFH>& chatOf(
         const std::string& groupId) const {
@@ -313,9 +322,11 @@ public:
 
     // ---------- 断电保存（群成员信息） ----------
     // 行格式：G 行=群目录；M 行=群聊消息记录。字段以 0x1F 分隔。
+    // 采用原子写（先写 .tmp 再替换），写失败时保留原存档并返回 false。
     bool saveToFile(const std::string& path) const {
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        if (!out) return false;
+        persist_util_fh::AtomicWriterFH writer(path);
+        if (!writer.ok()) return false;
+        std::ostream& out = writer.stream();
         using persist_util_fh::kFieldSepFH;
         using persist_util_fh::escapeTextFH;
         for (const GroupInfoFH& g : groups_) {
@@ -339,11 +350,17 @@ public:
                     << m.sentAt.time_since_epoch().count() << '\n';
             }
         }
-        return true;
+        return writer.commit();
     }
 
     // 从文件恢复群目录（文件不存在返回 false，保持现状）。
     // 恢复后自建群号从“现有最大群号+1”继续递增。
+    // 容错口径：
+    //   - 单行损坏只跳过该行，不影响其它记录；
+    //   - 群号非法/重复、人数上限非法、消息类型越界的记录一律丢弃；
+    //   - 若整份存档没有解析出任何可用群（空文件 / 被截断 / 格式不符），
+    //     返回 false 并保持当前目录，绝不用空目录覆盖（否则 6 个官方
+    //     预置群会被静默清空，并在析构时把空目录写回存档）。
     bool loadFromFile(const std::string& path) {
         std::ifstream in(path, std::ios::binary);
         if (!in) return false;
@@ -354,29 +371,30 @@ public:
             try {
                 std::vector<std::string> f = persist_util_fh::splitFieldsFH(line);
                 if (f[0] == "G" && f.size() >= 9) {
+                    std::size_t maxMembers = 0;
+                    long long predefined = 0;
+                    if (f[2].empty() || containsGroupId(loaded, f[2])) continue;
+                    if (!parseCount(f[5], kMaxGroupMembersFH, maxMembers)) continue;
+                    if (!parseInt10(f[6], predefined)) continue;
                     GroupInfoFH g;
                     if (!persist_util_fh::platformFromName(f[1], g.platform))
                         continue;
                     g.groupId = f[2];
                     g.name = persist_util_fh::unescapeTextFH(f[3]);
                     g.ownerId = f[4];
-                    g.maxMembers = static_cast<std::size_t>(std::stoul(f[5]));
-                    g.predefined = f[6] == "1";
-                    if (f[7].size() == 1 && f[7][0] == '-') {  // 空列表占位
-                    } else if (!f[7].empty()) {
-                        splitIds(f[7], g.adminIds);
-                    }
-                    if (f[8].size() == 1 && f[8][0] == '-') {
-                    } else if (!f[8].empty()) {
-                        splitIds(f[8], g.memberIds);
-                    }
+                    g.maxMembers = maxMembers;
+                    g.predefined = (predefined != 0);
+                    if (!isEmptyListMark(f[7])) splitIds(f[7], g.adminIds);
+                    if (!isEmptyListMark(f[8])) splitIds(f[8], g.memberIds);
                     loaded.push_back(std::move(g));
                 } else if (f[0] == "M" && f.size() >= 8 && !loaded.empty()) {
                     // 消息记录挂到最近一次出现的群（文件按群序写出）
                     GroupInfoFH& g = loaded.back();
                     if (g.groupId != f[1]) continue;
+                    MessageKindFH kind = MessageKindFH::TEXT;
+                    if (!parseKind(f[2], kind)) continue;  // 越界类型直接丢弃
                     GroupChatRecordFH m;
-                    m.kind = static_cast<MessageKindFH>(std::stoi(f[2]));
+                    m.kind = kind;
                     m.senderId = f[3];
                     m.senderNick = persist_util_fh::unescapeTextFH(f[4]);
                     m.content = persist_util_fh::unescapeTextFH(f[5]);
@@ -391,6 +409,7 @@ public:
                 continue;  // 跳过损坏行：存档被截断/篡改不应导致启动崩溃
             }
         }
+        if (loaded.empty()) return false;  // 无可信内容：保持现状，不覆盖
         groups_ = std::move(loaded);
         rebuildNextGroupNo();
         return true;
@@ -435,27 +454,78 @@ private:
                             const std::string& id) {
         removeId(ids, id);
     }
+    // 成员/管理员号码以 ',' 连接成一个字段。号码本身可能含 ',' 或 '\'
+    // （注册中心不限制号码字符集），因此写入时做最小转义（\, 与 \\），
+    // 否则 "a,b" 这样的号码会在读回时被拆成两个成员。
     static std::string joinIds(const std::vector<std::string>& ids) {
         if (ids.empty()) return "-";
         std::string out;
         for (const std::string& id : ids) {
             if (!out.empty()) out.push_back(',');
-            out += id;
+            for (char ch : id) {
+                if (ch == '\\' || ch == ',') out.push_back('\\');
+                out.push_back(ch);
+            }
         }
         return out;
     }
     static void splitIds(const std::string& joined,
                          std::vector<std::string>& ids) {
         std::string cur;
+        bool escaped = false;
         for (char ch : joined) {
-            if (ch == ',') {
+            if (escaped) {
+                cur.push_back(ch);
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == ',') {
                 if (!cur.empty()) ids.push_back(cur);
                 cur.clear();
             } else {
                 cur.push_back(ch);
             }
         }
+        if (escaped) cur.push_back('\\');  // 行尾孤立反斜杠
         if (!cur.empty()) ids.push_back(cur);
+    }
+    // 空列表在存档中的占位符
+    static bool isEmptyListMark(const std::string& s) { return s == "-"; }
+    // 严格十进制解析（不接受符号与空白），超过 10 亿视为非法以免溢出
+    static bool parseInt10(const std::string& s, long long& out) {
+        if (s.empty()) return false;
+        long long v = 0;
+        for (char ch : s) {
+            if (ch < '0' || ch > '9') return false;
+            v = v * 10 + (ch - '0');
+            if (v > 1000000000LL) return false;
+        }
+        out = v;
+        return true;
+    }
+    // 群人数上限：必须是 1 ~ cap 的整数
+    static bool parseCount(const std::string& s, std::size_t cap,
+                           std::size_t& out) {
+        long long v = 0;
+        if (!parseInt10(s, v) || v < 1) return false;
+        if (static_cast<unsigned long long>(v) > cap) return false;
+        out = static_cast<std::size_t>(v);
+        return true;
+    }
+    // 存档中的消息类型：必须是合法枚举值
+    static bool parseKind(const std::string& s, MessageKindFH& out) {
+        long long v = 0;
+        if (!parseInt10(s, v)) return false;
+        MessageKindFH kind = static_cast<MessageKindFH>(v);
+        if (!isValidKindFH(kind)) return false;
+        out = kind;
+        return true;
+    }
+    static bool containsGroupId(const std::vector<GroupInfoFH>& list,
+                                const std::string& groupId) {
+        for (const GroupInfoFH& g : list)
+            if (g.groupId == groupId) return true;
+        return false;
     }
     void rebuildNextGroupNo() {
         int maxNo = 1006;  // 预置群号上界
@@ -478,4 +548,5 @@ private:
     std::vector<GroupInfoFH> groups_;
     int nextGroupNo_ = 1007;  // 自建群号从 1007 起递增
     std::string persistPath_; // 断电保存文件（空=未启用）
+    std::set<std::string> presetInjected_;  // 已注入过初始成员的预置群号
 };
