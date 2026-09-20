@@ -1098,6 +1098,11 @@ void runLocalChat(const LocalSlot& slot) {
 // 阶段 C/D：官方群 / 自建群（群注册表）会话窗口
 // ============================================================
 
+// 注意：findGroup 返回的是指向群注册表内部元素的指针，建群 / 解散群会让它失效。
+// 本文件的使用约定：拿到 info 后只在“本次迭代内、且不发生结构性变更”时使用；
+// 任何解散 / 建群之后不得再解引用旧指针（要么继续循环重新取，要么先把需要的
+// 字段拷出来）。runOfficialChat 的 groupId 按值传递，也是为了避免调用方把
+// 内部元素的成员引用绑进来后因解散而悬空。
 const GroupInfoFH* findOfficial(const std::string& groupId) {
     return g.official.findGroup(groupId);
 }
@@ -1134,7 +1139,9 @@ std::string officialSendReason(const GroupInfoFH* info,
     return {};
 }
 
-void runOfficialChat(const std::string& groupId) {
+// groupId 按值传递：调用方常写成 runOfficialChat(hits[i]->groupId)，若按 const&
+// 绑定到注册表内部元素，一旦本会话内解散该群就会悬空引用。
+void runOfficialChat(std::string groupId) {
     for (;;) {
         const GroupInfoFH* info = findOfficial(groupId);
         if (!info) {
@@ -1161,6 +1168,8 @@ void runOfficialChat(const std::string& groupId) {
         if (!hasAcct)
             s.text("  注意：你缺少该平台的账号，需先到【账号中心】处理。");
 
+        // 该引用只在本次迭代的渲染阶段使用：下面的分支一旦改动群目录
+        // （建群 / 解散）就必须 continue/return，不得再读 info 或 chat。
         const auto& chat = info->chat;
         const int tailRows = 5;
         int budget = s.rowsLeft() - tailRows;
@@ -1341,8 +1350,11 @@ void runOfficialChat(const std::string& groupId) {
                 continue;
             }
             busy("解散处理");
+            // 解散会把该群从注册表移除，info 随即失效 —— 提示文案要用的群名
+            // 必须先拷贝成独立字符串，再做解散（否则是悬空解引用）。
+            const std::string groupName = info->name;
             if (g.official.disbandGroup(*g.me, groupId)) {
-                noticeOK("已解散「" + info->name + "」，该群已从群列表移除。");
+                noticeOK("已解散「" + groupName + "」，该群已从群列表移除。");
                 return;
             }
             noticeFail("解散失败：仅群主可解散自建群。");
