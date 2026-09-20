@@ -182,9 +182,9 @@ FH_TEST(RecallWindowBoundaryIsInclusiveAndOwnershipEnforced) {
     FH_CHECK(!pol.isAllowed(ActionFH::RECALL_MESSAGE, recalledAgain));
 }
 
-// ---------------- 六步链对非差异操作在两种策略下一视同仁 ----------------
+// ---------------- 发言两平台一致；管理动作在微信群收窄为仅群主 ----------------
 
-FH_TEST(CommonActionsEqualAcrossPlatforms) {
+FH_TEST(SendIsCommonButGroupEditingIsPlatformGated) {
     Rig rig;
     auto qq = rig.qq();
     auto wx = rig.wx();
@@ -195,19 +195,21 @@ FH_TEST(CommonActionsEqualAcrossPlatforms) {
         auto m = make_shared<MessageFH>("m" + std::to_string(++msgSeq), who, "hi");
         return ctx(g, who, nullptr, m);
     };
-    // 普通成员发送：两平台都允许
+    // 普通成员发送：两平台都允许（无平台差异）
     FH_CHECK(qPol.isAllowed(ActionFH::SEND_MESSAGE, sendOf(*qq, qPol, rig.member)));
     FH_CHECK(wPol.isAllowed(ActionFH::SEND_MESSAGE, sendOf(*wx, wPol, rig.member)));
-    // 管理员编辑群名：两平台都允许；普通成员都不允许
+    // 改群名：QQ 管理员可执行；微信仅群主（管理员不是特权账号，平台差异）
     auto editAdminQ = ctx(*qq, rig.admin, nullptr, nullptr);
     auto editAdminW = ctx(*wx, rig.admin, nullptr, nullptr);
+    auto editOwnerW = ctx(*wx, rig.owner, nullptr, nullptr);
     auto editMemberQ = ctx(*qq, rig.member, nullptr, nullptr);
     auto editMemberW = ctx(*wx, rig.member, nullptr, nullptr);
     FH_CHECK(qPol.isAllowed(ActionFH::EDIT_GROUP, editAdminQ));
-    FH_CHECK(wPol.isAllowed(ActionFH::EDIT_GROUP, editAdminW));
+    FH_CHECK(!wPol.isAllowed(ActionFH::EDIT_GROUP, editAdminW));
+    FH_CHECK(wPol.isAllowed(ActionFH::EDIT_GROUP, editOwnerW));  // 群主仍然可以
     FH_CHECK(!qPol.isAllowed(ActionFH::EDIT_GROUP, editMemberQ));
     FH_CHECK(!wPol.isAllowed(ActionFH::EDIT_GROUP, editMemberW));
-    // 解散：仅群主
+    // 解散：仅群主（两平台一致）
     auto disbandAdminQ = ctx(*qq, rig.admin, nullptr, nullptr);
     auto disbandOwnerW = ctx(*wx, rig.owner, nullptr, nullptr);
     FH_CHECK(!qPol.isAllowed(ActionFH::DISBAND_GROUP, disbandAdminQ));

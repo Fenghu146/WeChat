@@ -1,7 +1,7 @@
 // ============================================================
 // qq_wechat_policy_test.cpp —— QQ / 微信平台差异矩阵（阶段 A）
 // 平台差异测试：普通成员邀请、admin 设全员禁言、admin 踢人/禁言、
-// 全员禁言下成员/管理员发言、人数上限读取配置。
+// admin 改群名/发公告、全员禁言下成员/管理员发言、人数上限读取配置。
 // ============================================================
 #include <chrono>
 #include <memory>
@@ -133,6 +133,35 @@ FH_TEST(KickAndMutePlatformDifference) {
     FH_CHECK(pair.wx->muteMember(pair.owner, pair.member, false));
     FH_CHECK(pair.wx->kickMember(pair.owner, pair.member));
     FH_CHECK(!pair.wx->contains(pair.member));
+}
+
+// 改群名 / 发公告权限差异：QQ = ADMIN+；微信 = 仅群主（管理员不是特权账号）
+FH_TEST(EditAndAnnouncePlatformDifference) {
+    GroupPair pair;
+
+    // 普通成员：两平台都无权
+    FH_CHECK(!pair.qq->editGroup(pair.member, "成员改名"));
+    FH_CHECK(!pair.wx->editGroup(pair.member, "成员改名"));
+    FH_CHECK(!pair.wx->publishAnnouncement(pair.member, "成员公告"));
+
+    // QQ 管理员：可改群名、可发公告
+    FH_CHECK(pair.qq->editGroup(pair.admin, "QQ管理员改名"));
+    FH_CHECK_EQ(pair.qq->getName(), std::string("QQ管理员改名"));
+    FH_CHECK(pair.qq->publishAnnouncement(pair.admin, "QQ管理员公告"));
+    FH_CHECK_EQ(pair.qq->getAnnouncement(), std::string("QQ管理员公告"));
+
+    // 微信管理员：一律拒绝，且群名/公告不变
+    const std::string wxName = pair.wx->getName();
+    FH_CHECK(!pair.wx->editGroup(pair.admin, "微信管理员改名"));
+    FH_CHECK_EQ(pair.wx->getName(), wxName);
+    FH_CHECK(!pair.wx->publishAnnouncement(pair.admin, "微信管理员公告"));
+    FH_CHECK_EQ(pair.wx->getAnnouncement(), std::string(""));
+
+    // 微信群主：改群名/发公告仍然可以
+    FH_CHECK(pair.wx->editGroup(pair.owner, "微信群主改名"));
+    FH_CHECK_EQ(pair.wx->getName(), std::string("微信群主改名"));
+    FH_CHECK(pair.wx->publishAnnouncement(pair.owner, "微信群主公告"));
+    FH_CHECK_EQ(pair.wx->getAnnouncement(), std::string("微信群主公告"));
 }
 
 // 人数上限解释：两平台都读取 GroupConfigFH，不硬编码
