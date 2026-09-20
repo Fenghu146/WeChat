@@ -1,6 +1,6 @@
 // ============================================================
 // qq_wechat_policy_test.cpp —— QQ / 微信平台差异矩阵（阶段 A）
-// 平台差异测试：普通成员邀请、admin 设全员禁言、
+// 平台差异测试：普通成员邀请、admin 设全员禁言、admin 踢人/禁言、
 // 全员禁言下成员/管理员发言、人数上限读取配置。
 // ============================================================
 #include <chrono>
@@ -102,6 +102,37 @@ FH_TEST(AllMuteAffectsBothPlatformsEqually) {
     FH_CHECK(pair.qq->sendMessage(pair.admin, msgs("a3", pair.admin)));
     FH_CHECK(pair.wx->sendMessage(pair.admin, msgs("a4", pair.admin)));
     FH_CHECK(pair.qq->sendMessage(pair.owner, msgs("a5", pair.owner)));
+}
+
+// 踢人 / 禁言权限差异：
+//   QQ  = 群主可操作任何人；管理员只能操作普通成员（不能踢/禁同级与群主）
+//   微信 = 仅有群主是特权账号 —— 管理员不能踢人/禁言，群主可以
+FH_TEST(KickAndMutePlatformDifference) {
+    GroupPair pair;
+
+    // QQ：管理员可禁言普通成员、可踢普通成员；但不能动群主或同级管理员
+    FH_CHECK(pair.qq->muteMember(pair.admin, pair.member, true));
+    FH_CHECK(pair.qq->isMuted(pair.member));
+    FH_CHECK(pair.qq->muteMember(pair.admin, pair.member, false));
+    FH_CHECK(!pair.qq->isMuted(pair.member));
+    FH_CHECK(!pair.qq->kickMember(pair.admin, pair.owner));   // 不能踢群主
+    FH_CHECK(!pair.qq->kickMember(pair.admin, pair.admin));   // 同级不可
+    FH_CHECK(pair.qq->kickMember(pair.admin, pair.member));
+    FH_CHECK(!pair.qq->contains(pair.member));
+
+    // 微信：管理员不是特权账号 —— 踢人/禁言一律拒绝，且状态不变
+    FH_CHECK(!pair.wx->muteMember(pair.admin, pair.member, true));
+    FH_CHECK(!pair.wx->isMuted(pair.member));
+    FH_CHECK(!pair.wx->kickMember(pair.admin, pair.member));
+    FH_CHECK(pair.wx->contains(pair.member));                 // 成员未被移出
+    FH_CHECK(!pair.wx->kickMember(pair.admin, pair.owner));   // 也不能踢群主
+
+    // 微信群主仍然可以踢人 / 禁言
+    FH_CHECK(pair.wx->muteMember(pair.owner, pair.member, true));
+    FH_CHECK(pair.wx->isMuted(pair.member));
+    FH_CHECK(pair.wx->muteMember(pair.owner, pair.member, false));
+    FH_CHECK(pair.wx->kickMember(pair.owner, pair.member));
+    FH_CHECK(!pair.wx->contains(pair.member));
 }
 
 // 人数上限解释：两平台都读取 GroupConfigFH，不硬编码

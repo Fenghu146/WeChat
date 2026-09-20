@@ -3,7 +3,8 @@
 // ------------------------------------------------------------
 // 针对“正常流程之外”的输入与状态做专项校验：
 //   1) 聚合根 GroupFH：空/重复消息、空白群名、非法撤回窗口、单员禁言对
-//      管理员是否真的生效、人数上限边界、群主/管理员不变量；
+//      管理员是否真的生效、人数上限边界、群主/管理员不变量、
+//      切换到微信模式后原 QQ 管理员不再是特权账号（踢人/禁言被拒）；
 //   2) 平台消息策略：越界消息类型、文本长度上限的“等于/超过”边界；
 //   3) 群注册表：加入/推荐/踢人的平台规则与人数上限；建群参数边界；
 //      预置群注入的幂等性；
@@ -254,6 +255,49 @@ FH_TEST(OwnerAndAdminInvariantsHoldAtBoundaries) {
     FH_CHECK(!g->sendMessage(member, mkMsg("after", member, "解散后")));
     FH_CHECK(!g->editGroup(member, "解散后改名"));
     FH_CHECK(!g->switchPolicy(make_shared<WeChatPolicyFH>()));
+}
+
+// 切换到微信模式后，原 QQ 管理员不再是特权账号（踢人/禁言被拒），群主仍可；
+// EDIT_GROUP / PUBLISH_ANNOUNCEMENT 按既有约定仍视为平台无关的公共操作。
+FH_TEST(WeChatModeRevokesRetainedAdminKickAndMute) {
+    auto owner = mkUser("o1");
+    auto admin = mkUser("a1");
+    auto member = mkUser("m1");
+    GroupConfigFH cfg(50, false, false, seconds(120));
+    auto g = make_shared<GroupFH>("b-wxmode", 1001, "模式切换", cfg,
+                                  make_shared<QQPolicyFH>(), owner);
+    FH_CHECK(g->inviteMember(owner, admin));
+    FH_CHECK(g->inviteMember(owner, member));
+    FH_CHECK(g->setAdmin(owner, admin, true));
+
+    // QQ 模式：管理员可踢普通成员、可禁言普通成员
+    FH_CHECK(g->muteMember(admin, member, true));
+    FH_CHECK(g->muteMember(admin, member, false));
+    FH_CHECK(g->kickMember(admin, member));
+    FH_CHECK(!g->contains(member));
+
+    // 加回成员后切到微信模式：成员数据不受影响，管理员身份仍在
+    FH_CHECK(g->inviteMember(owner, member));
+    FH_CHECK(g->switchPolicy(make_shared<WeChatPolicyFH>()));
+    FH_CHECK_EQ(g->getRole(admin), GroupRoleFH::ADMIN);
+    FH_CHECK_EQ(g->members().size(), std::size_t(3));
+
+    // 微信模式：管理员不是特权账号 —— 踢人 / 禁言都被拒，且状态不变
+    FH_CHECK(!g->kickMember(admin, member));
+    FH_CHECK(g->contains(member));
+    FH_CHECK(!g->muteMember(admin, member, true));
+    FH_CHECK(!g->isMuted(member));
+
+    // 群主仍然可以踢人 / 禁言
+    FH_CHECK(g->muteMember(owner, member, true));
+    FH_CHECK(g->isMuted(member));
+    FH_CHECK(g->muteMember(owner, member, false));
+    FH_CHECK(g->kickMember(owner, member));
+    FH_CHECK(!g->contains(member));
+
+    // 本次未改动的口径：改群名/发公告仍为「平台无关的公共操作」
+    FH_CHECK(g->editGroup(admin, "微信模式下改名"));
+    FH_CHECK(g->publishAnnouncement(admin, "微信模式下发公告"));
 }
 
 // ---------------- 2. 平台消息策略边界 ----------------
