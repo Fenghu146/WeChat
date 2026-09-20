@@ -110,7 +110,8 @@ FH_TEST(DeactivateRequiresLogoutFirst) {
     FH_CHECK(!act.deactivate(*p.xm, PlatformKindFH::QQ));  // 未开通不可再取消
 }
 
-// 登录联动：一次登录，全部已开通服务上线；退出为单服务操作
+// 登录联动：登录一个服务后，简单确认（confirmLink）使全部已开通服务上线；
+// 退出为单服务操作
 FH_TEST(LoginLinksAllActivatedServices) {
     People p;
     ActivationManagerFH act;
@@ -120,17 +121,24 @@ FH_TEST(LoginLinksAllActivatedServices) {
     FH_CHECK(act.activate(*p.xm, PlatformKindFH::WeChat));
     // 未开通的服务不能登录
     FH_CHECK(!login.login(*p.hong, PlatformKindFH::QQ));
-    FH_CHECK(login.login(*p.xm, PlatformKindFH::QQ));  // 登录 QQ
+    FH_CHECK(login.login(*p.xm, PlatformKindFH::QQ));  // 登录 QQ：仅目标服务上线
     FH_CHECK(login.isOnline(*p.xm, PlatformKindFH::QQ));
+    FH_CHECK(!login.isOnline(*p.xm, PlatformKindFH::Weibo));   // 确认前不自动上线
+    FH_CHECK(!login.isOnline(*p.xm, PlatformKindFH::WeChat));  // 确认前不自动上线
+    FH_CHECK_EQ(login.confirmLink(*p.xm), 2);  // 简单确认后其余两个服务上线
     FH_CHECK(login.isOnline(*p.xm, PlatformKindFH::Weibo));   // 联动上线
     FH_CHECK(login.isOnline(*p.xm, PlatformKindFH::WeChat));  // 联动上线
     FH_CHECK_EQ(login.onlinePlatforms(*p.xm).size(), std::size_t(3));
+    FH_CHECK_EQ(login.confirmLink(*p.xm), 0);  // 幂等：已全部在线，无新增
     // 退出只影响单个服务
     FH_CHECK(login.logout(*p.xm, PlatformKindFH::QQ));
     FH_CHECK(!login.isOnline(*p.xm, PlatformKindFH::QQ));
     FH_CHECK(login.isOnline(*p.xm, PlatformKindFH::Weibo));   // 其余保持在线
+    FH_CHECK_EQ(login.confirmLink(*p.xm), 1);  // 重新确认：仅补上已退出的 QQ
+    FH_CHECK(login.isOnline(*p.xm, PlatformKindFH::QQ));
     login.logoutAll(*p.xm);  // 退出全部服务
     FH_CHECK_EQ(login.onlinePlatforms(*p.xm).size(), std::size_t(0));
+    FH_CHECK_EQ(login.confirmLink(*p.xm), 3);  // 全部离线时确认，三个服务上线
 }
 
 }  // namespace

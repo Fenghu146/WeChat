@@ -242,7 +242,8 @@ public:
         return true;
     }
 
-    // 从文件恢复好友关系（文件不存在返回 false，保持现状）
+    // 从文件恢复好友关系（文件不存在返回 false，保持现状）。
+    // 鲁棒性：空文件 / 全部行损坏时返回 false 并保持现状，避免损坏存档清空数据。
     bool loadFromFile(const std::string& path) {
         std::ifstream in(path, std::ios::binary);
         if (!in) return false;
@@ -260,6 +261,7 @@ public:
             e.remark = persist_util_fh::unescapeTextFH(f[5]);
             loaded.push_back(std::move(e));
         }
+        if (loaded.empty()) return false;  // 无有效数据：保持现状
         edges_ = std::move(loaded);
         return true;
     }

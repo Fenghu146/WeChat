@@ -343,7 +343,8 @@ public:
     }
 
     // 从文件恢复群目录（文件不存在返回 false，保持现状）。
-    // 恢复后自建群号从“现有最大群号+1”继续递增。
+    // 鲁棒性：空文件/全部行损坏时同样返回 false 并保持现状（保留预置群），
+    // 避免一次损坏存档清空全部群目录；恢复后自建群号从"现有最大群号+1"继续。
     bool loadFromFile(const std::string& path) {
         std::ifstream in(path, std::ios::binary);
         if (!in) return false;
@@ -375,22 +376,24 @@ public:
                     // 消息记录挂到最近一次出现的群（文件按群序写出）
                     GroupInfoFH& g = loaded.back();
                     if (g.groupId != f[1]) continue;
+                    int kind = std::stoi(f[2]);
+                    if (kind < 0 || kind > 4) continue;  // 非法消息类型：跳过该行
                     GroupChatRecordFH m;
-                    m.kind = static_cast<MessageKindFH>(std::stoi(f[2]));
+                    m.kind = static_cast<MessageKindFH>(kind);
                     m.senderId = f[3];
                     m.senderNick = persist_util_fh::unescapeTextFH(f[4]);
                     m.content = persist_util_fh::unescapeTextFH(f[5]);
                     m.isReply = f[6] == "1";
                     m.sentAt = std::chrono::system_clock::time_point(
                         std::chrono::system_clock::duration(
-                            std::chrono::system_clock::duration::rep(
-                                std::stoll(f[7]))));
+                            std::stoll(f[7])));
                     g.chat.push_back(std::move(m));
                 }
             } catch (const std::exception&) {
                 continue;  // 跳过损坏行：存档被截断/篡改不应导致启动崩溃
             }
         }
+        if (loaded.empty()) return false;  // 无有效数据：保持现状
         groups_ = std::move(loaded);
         rebuildNextGroupNo();
         return true;

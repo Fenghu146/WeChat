@@ -247,9 +247,11 @@ FH_TEST(EndToEnd_LoginLinkage) {
     FH_CHECK(act.activate(*alice, PlatformKindFH::QQ));
     FH_CHECK(act.activate(*alice, PlatformKindFH::WeChat));
 
-    // 登录 QQ，微信联动上线
+    // 登录 QQ，然后简单确认，微信联动上线
     FH_CHECK(login.login(*alice, PlatformKindFH::QQ));
     FH_CHECK(login.isOnline(*alice, PlatformKindFH::QQ));
+    FH_CHECK(!login.isOnline(*alice, PlatformKindFH::WeChat));
+    FH_CHECK_EQ(login.confirmLink(*alice), 1);  // 确认：微信联动上线
     FH_CHECK(login.isOnline(*alice, PlatformKindFH::WeChat));
 
     // 单服务退出

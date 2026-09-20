@@ -468,8 +468,11 @@ FH_TEST(Doc_5_6_2_LoginLinkageAutoOnline) {
     FH_CHECK(act.activate(*u, PlatformKindFH::WeChat));
 
     LoginManagerFH login;
-    // 登录 QQ → 已开通的微信自动进入在线（简单确认即自动登录）
+    // 登录 QQ：目标服务上线；简单确认后已开通的微信才自动上线
     FH_CHECK(login.login(*u, PlatformKindFH::QQ));
+    FH_CHECK(login.isOnline(*u, PlatformKindFH::QQ));
+    FH_CHECK(!login.isOnline(*u, PlatformKindFH::WeChat));  // 确认前微信未上线
+    FH_CHECK_EQ(login.confirmLink(*u), 1);  // 简单确认：微信自动登录
     FH_CHECK(login.isOnline(*u, PlatformKindFH::QQ));
     FH_CHECK(login.isOnline(*u, PlatformKindFH::WeChat));
     FH_CHECK(login.logout(*u, PlatformKindFH::QQ));

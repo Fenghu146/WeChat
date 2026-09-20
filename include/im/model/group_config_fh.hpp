@@ -39,10 +39,11 @@ public:
     void setAllMuted(bool allMuted) noexcept { allMuted_ = allMuted; }
 
     // 撤回时间窗可在群运行期调整（由 GroupFH::setRecallTimeLimit 授权后调用）；
-    // 负数属非法配置，validate() 会抛出 std::invalid_argument
+    // 负数属非法配置 —— 先校验后写入，保证抛异常时配置不被污染
     void setRecallTimeLimit(std::chrono::seconds limit) {
+        if (limit < std::chrono::seconds::zero())
+            throw std::invalid_argument("GroupConfigFH: recall time limit must not be negative");
         recallTimeLimit_ = limit;
-        validate();
     }
 
 private:

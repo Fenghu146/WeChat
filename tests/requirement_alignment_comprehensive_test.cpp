@@ -429,6 +429,7 @@ FH_TEST(Comprehensive_ActivationManagement) {
     // 取消开通：在线时拒绝，退出后允许
     LoginManagerFH login;
     FH_CHECK(login.login(*u, PlatformKindFH::QQ));
+    FH_CHECK_EQ(login.confirmLink(*u), 2);  // 简单确认后其余已开通服务上线
     FH_CHECK(!act.deactivate(*u, PlatformKindFH::WeChat));  // 在线不可取消
     FH_CHECK(!act.deactivate(*u, PlatformKindFH::Weibo));   // 在线不可取消
     login.logoutAll(*u);  // 全部退出后再取消
@@ -450,9 +451,12 @@ FH_TEST(Comprehensive_LoginLinkageAllServices) {
     FH_CHECK(act.activate(*u, PlatformKindFH::Weibo));
     FH_CHECK(act.activate(*u, PlatformKindFH::WeChat));
 
-    // 登录 QQ → 全部已开通服务上线
+    // 登录 QQ → 仅目标服务上线；简单确认后全部已开通服务上线
     FH_CHECK(login.login(*u, PlatformKindFH::QQ));
     FH_CHECK(login.isOnline(*u, PlatformKindFH::QQ));
+    FH_CHECK(!login.isOnline(*u, PlatformKindFH::Weibo));   // 确认前不自动上线
+    FH_CHECK(!login.isOnline(*u, PlatformKindFH::WeChat));  // 确认前不自动上线
+    FH_CHECK_EQ(login.confirmLink(*u), 2);  // 简单确认
     FH_CHECK(login.isOnline(*u, PlatformKindFH::Weibo));
     FH_CHECK(login.isOnline(*u, PlatformKindFH::WeChat));
     FH_CHECK_EQ(login.onlinePlatforms(*u).size(), size_t(3));
@@ -469,6 +473,9 @@ FH_TEST(Comprehensive_LoginLinkageAllServices) {
     // 退出后仍可重新登录（服务仍为开通状态）
     FH_CHECK(login.login(*u, PlatformKindFH::QQ));
     FH_CHECK(login.isOnline(*u, PlatformKindFH::QQ));
+    FH_CHECK(!login.isOnline(*u, PlatformKindFH::Weibo));
+    FH_CHECK(!login.isOnline(*u, PlatformKindFH::WeChat));
+    FH_CHECK_EQ(login.confirmLink(*u), 2);  // 再次确认，恢复全家在线
     FH_CHECK(login.isOnline(*u, PlatformKindFH::Weibo));
     FH_CHECK(login.isOnline(*u, PlatformKindFH::WeChat));
 }

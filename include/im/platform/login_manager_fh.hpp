@@ -5,8 +5,10 @@
 // 职责：受理“登录某微X 服务”请求并维护在线状态。
 // 规则(任务书第5点)：
 //   - 只能登录本人【已开通】的服务，否则登录失败；
-//   - 任一服务登录成功后，本人其余已开通服务自动进入登录
-//     (在线)状态 —— 体现“一次登录、全家在线”的联动设计；
+//   - 「各微 X 之间只要有一个服务登录，则其它服务【简单确认后】视为自动登录」：
+//     · login() 只把【目标服务】置为在线（“一个服务登录”）；
+//     · confirmLink() 即任务书所述“简单确认”——确认后把本人全部已开通
+//       服务一并视为登录（在线），落实“简单确认后视为自动登录”。
 //   - 退出为单服务操作：仅将该服务置为离线，其余不受影响。
 // 本类无状态，在线状态记录在 UserProfileFH::online_ 中。
 // ============================================================
@@ -19,12 +21,23 @@ class LoginManagerFH {
 public:
     LoginManagerFH() = default;
 
-    // 登录指定服务；成功后本人全部已开通服务自动上线
+    // 登录指定服务：仅目标服务上线（任务书第5点“一个服务登录”）。
+    // 前提：该服务已开通；否则返回 false。
+    // 其余已开通服务不会在此自动上线，须由调用方显式调用 confirmLink()。
     bool login(UserProfileFH& user, PlatformKindFH platform) const noexcept {
         if (!user.isActivated(platform)) return false;  // 未开通则无法登录
-        for (PlatformKindFH each : user.activatedPlatforms())
-            user.setOnline(each, true);  // 联动：其余已开通服务一并登录
+        user.setOnline(platform, true);
         return true;
+    }
+
+    // 简单确认（任务书第5点“简单确认后视为自动登录”）：
+    // 确认后，本人全部已开通服务视为已登录（在线）。
+    // 返回本次新上线的服务数量（已在线的计 0；无已开通服务返回 0）。
+    int confirmLink(UserProfileFH& user) const noexcept {
+        int newly = 0;
+        for (PlatformKindFH each : user.activatedPlatforms())
+            if (user.setOnline(each, true)) ++newly;
+        return newly;
     }
 
     // 单服务退出登录

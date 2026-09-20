@@ -39,7 +39,8 @@ set(FH_TEST_TARGETS
     regression_tests
     e2e_integration_test
     requirement_alignment_test
-    requirement_alignment_comprehensive_test)
+    requirement_alignment_comprehensive_test
+    boundary_robustness_test)
 foreach(tgt IN LISTS FH_TEST_TARGETS)
     add_executable(${tgt} tests/${tgt}.cpp)
     target_link_libraries(${tgt} PRIVATE im_core_fh)

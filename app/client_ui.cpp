@@ -1721,7 +1721,7 @@ std::string accountNextStep() {
     for (const auto pl :
          {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo})
         if (p->isActivated(pl) && !p->isOnline(pl))
-            return "按 [4] 登录" + platCn(pl) + "（其余已开通服务会自动登录）";
+            return "按 [4] 登录" + platCn(pl) + "（简单确认后其余已开通服务自动登录）";
     for (const auto pl :
          {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo})
         if (p->isOnline(pl))
@@ -1737,7 +1737,7 @@ void runServiceCenter() {
         s.blank();
         s.section("平台规则");
         s.item("QQ/微博共享号码；微信独立号码可绑定 QQ；开通后才能登录");
-        s.item("任一服务登录后，其余已开通服务自动登录");
+        s.item("任一服务登录后，其余已开通服务经简单确认（y）自动登录");
         s.item("状态口径：有账号 → 已开通（自选启用）→ 在线；三者互相独立，"
                "绑定微信号 ≠ 已开通微信");
         s.kv("建议下一步", accountNextStep());
@@ -1802,10 +1802,28 @@ void runServiceCenter() {
             if (!pl) { noticeInfo("已取消"); continue; }
             busy("登录处理");
             if (g.login.login(*g.me, *pl)) {
+                // 任务书第5点：简单确认 —— 其余已开通服务是否自动登录
+                std::vector<PlatformKindFH> others;
+                for (const auto p : g.me->activatedPlatforms())
+                    if (p != *pl && !g.me->isOnline(p)) others.push_back(p);
+                if (!others.empty()) {
+                    std::string names;
+                    for (const auto p : others) names += platCn(p) + " ";
+                    std::cout << "  你还有 " << others.size()
+                              << " 个已开通服务尚未在线（" << names << "）。"
+                              << "输入 y 确认自动登录，其他键跳过：";
+                    std::cout.flush();
+                    if (waitKey() == 'y') {
+                        const int n = g.login.confirmLink(*g.me);
+                        noticeOK("确认通过，" + std::to_string(n) +
+                                 " 个服务自动登录");
+                    } else {
+                        noticeInfo("已跳过自动登录，仅 " + platCn(*pl) + " 在线");
+                    }
+                }
                 std::string on;
                 for (const auto p : g.me->onlinePlatforms()) on += platCn(p) + " ";
-                noticeOK("已登录" + platCn(*pl) + "；按联动规则，其余已开通服务"
-                         "自动登录，当前在线：" + on);
+                noticeOK("已登录" + platCn(*pl) + "，当前在线：" + on);
             } else {
                 if (!g.me->isActivated(*pl))
                     noticeFail("未开通" + platCn(*pl) +

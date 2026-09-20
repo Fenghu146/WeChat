@@ -436,12 +436,19 @@ void runAutoPlatformScenario() {
         rows.flush(std::cout, 5);
     }
 
-    step("[B4]", "登录联动：登录一个服务 → 其余已开通服务自动登录");
+    step("[B4]", "登录 + 简单确认联动（任务书第5点）");
     {
         fh_ui::Rows rows;
         rows.add("小红尚未开通服务，登录 QQ",
                  okDenied(login.login(*xiaohong, PlatformKindFH::QQ)), "（应失败）");
-        rows.add("小明登录 QQ", ok(login.login(*xiaoming, PlatformKindFH::QQ)));
+        rows.add("小明登录 QQ（仅目标服务上线）",
+                 ok(login.login(*xiaoming, PlatformKindFH::QQ)));
+        rows.add("确认前微信是否在线",
+                 okDenied(login.isOnline(*xiaoming, PlatformKindFH::WeChat)),
+                 "（确认前不应上线）");
+        const int newly = login.confirmLink(*xiaoming);
+        rows.add("简单确认：自动登录其余已开通服务",
+                 ok(newly == 2) + "（新上线 " + std::to_string(newly) + " 个）");
         rows.flush(std::cout, 5);
     }
     printOnlinePlatforms("小明", login.onlinePlatforms(*xiaoming));
