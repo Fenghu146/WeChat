@@ -38,11 +38,12 @@ public:
     // 全员禁言开关，由 GroupFH::setAllMute 在授权通过后调用
     void setAllMuted(bool allMuted) noexcept { allMuted_ = allMuted; }
 
-    // 撤回时间窗可在群运行期调整（由 GroupFH::setRecallTimeLimit 授权后调用）；
-    // 负数属非法配置，validate() 会抛出 std::invalid_argument
-    void setRecallTimeLimit(std::chrono::seconds limit) {
+    // 撤回时间窗可在群运行期调整（由 GroupFH::setRecallTimeLimit 授权后调用）。
+    // 返回 false 表示拒绝该取值，且配置保持原样（不会先写坏再校验）。
+    bool setRecallTimeLimit(std::chrono::seconds limit) noexcept {
+        if (limit < std::chrono::seconds::zero()) return false;
         recallTimeLimit_ = limit;
-        validate();
+        return true;
     }
 
 private:

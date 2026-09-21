@@ -106,10 +106,10 @@ Group ── 1..* ── GroupMembership ── 1 ── User
 | `SEND_MESSAGE` | ✓ | ✓ | ✓ | 否 | 是 | 还需通过禁言状态检查（见 3.3.3） |
 | `RECALL_MESSAGE` | ✓ | ✓ | ✓ | 否 | 是 | 普通成员仅限本人消息；全部受撤回时间窗约束 |
 | `INVITE_MEMBER` | ✓ | ✓ | 见平台差异 | 是 | 否 | 被邀请者必须当前不在群内 |
-| `KICK_MEMBER` | ✓ | ✓ | ✗ | 是 | 否 | 不能操作同级或更高角色 |
-| `MUTE_MEMBER` | ✓ | ✓ | ✗ | 是 | 否 | 不能操作同级或更高角色 |
-| `EDIT_GROUP` | ✓ | ✓ | ✗ | 否 | 否 | 修改群名称等群信息 |
-| `PUBLISH_ANNOUNCEMENT` | ✓ | ✓ | ✗ | 否 | 否 | 发布群公告 |
+| `KICK_MEMBER` | ✓ | ✓ | ✗ | 是 | 否 | 不能操作同级或更高角色；微信平台规则收紧为仅群主 |
+| `MUTE_MEMBER` | ✓ | ✓ | ✗ | 是 | 否 | 不能操作同级或更高角色；微信平台规则收紧为仅群主 |
+| `EDIT_GROUP` | ✓ | ✓ | ✗ | 否 | 否 | 修改群名称等群信息；微信平台规则收紧为仅群主（`setRecallTimeLimit` / `setMemberInviteEnabled` 同走本授权） |
+| `PUBLISH_ANNOUNCEMENT` | ✓ | ✓ | ✗ | 否 | 否 | 发布群公告；微信平台规则收紧为仅群主 |
 | `SET_ALL_MUTE` | ✓ | ✓ | ✗ | 否 | 否 | 公共权限 ADMIN+；微信平台规则收紧为仅群主 |
 | `ASSIGN_ADMIN`（2.0 新增） | ✓ | ✗ | ✗ | 是 | 否 | 仅群主任免管理员；目标当前角色校验由 `Group` 兜底 |
 | `TRANSFER_OWNER` | ✓ | ✗ | ✗ | 是 | 否 | 原子交换角色，原群主降为 `MEMBER` |

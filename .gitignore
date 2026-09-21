@@ -6,6 +6,11 @@ save_*.dat
 demo_save_*.dat
 ~$*.docx
 
+# 回归测试运行期产物（boundary_robustness_test / demo_flow_smoke_test）
+fh_boundary_*.dat
+fh_boundary_*.dat.tmp
+fh_demo_smoke_output.txt
+
 .DS_Store
 Testing/
 .codebuddy/

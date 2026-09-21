@@ -61,12 +61,17 @@ public:
 
     // ======================= 业务操作：先授权，后变更状态 =======================
 
-    // 发送消息：发送者须为本人；通过禁言等状态检查后追加到消息列表
+    // 发送消息：发送者须为本人；消息标识不能为空且必须唯一（标识重复会
+    // 让 recallMessage 命中同名的旧消息）；内容不能为空。
+    // 通过禁言等状态检查后追加到消息列表
     bool sendMessage(const std::shared_ptr<UserFH>& op,
                      const std::shared_ptr<MessageFH>& message) {
         if (!message || !message->getSender() || !op ||
             message->getSender()->getId() != op->getId())
             return false;  // 发送者必须与操作者一致
+        if (message->getId().empty() || message->getContent().empty())
+            return false;  // 空标识 / 空内容无业务含义
+        if (findMessage(message->getId())) return false;  // 群内消息标识不可重复
         GroupContextFH c{this, op, nullptr, message,
                          std::chrono::system_clock::now()};
         if (!execute(ActionFH::SEND_MESSAGE, c)) return false;
@@ -124,9 +129,9 @@ public:
         return true;
     }
 
-    // 修改群名称：ADMIN+ 可执行，新名称不能为空
+    // 修改群名称：ADMIN+ 可执行，新名称不能为空（全空白同样视为空）
     bool editGroup(const std::shared_ptr<UserFH>& op, const std::string& newName) {
-        if (newName.empty()) return false;
+        if (isBlankText(newName)) return false;
         GroupContextFH c{this, op, nullptr, nullptr,
                          std::chrono::system_clock::now()};
         if (!execute(ActionFH::EDIT_GROUP, c)) return false;
@@ -134,10 +139,10 @@ public:
         return true;
     }
 
-    // 发布群公告：ADMIN+ 可执行，内容不能为空
+    // 发布群公告：ADMIN+ 可执行，内容不能为空（全空白同样视为空）
     bool publishAnnouncement(const std::shared_ptr<UserFH>& op,
                              const std::string& text) {
-        if (text.empty()) return false;
+        if (isBlankText(text)) return false;
         GroupContextFH c{this, op, nullptr, nullptr,
                          std::chrono::system_clock::now()};
         if (!execute(ActionFH::PUBLISH_ANNOUNCEMENT, c)) return false;
@@ -155,14 +160,13 @@ public:
     }
 
     // 变更群配置：走 EDIT_GROUP 授权（ADMIN+），用于验证“群设置可动态变更”
-    // —— 撤回时间窗（负数由 GroupConfigFH::validate 拒绝）
+    // —— 撤回时间窗（负数非法：返回 false 且配置保持原值，不再向外抛异常）
     bool setRecallTimeLimit(const std::shared_ptr<UserFH>& op,
                             std::chrono::seconds limit) {
         GroupContextFH c{this, op, nullptr, nullptr,
                          std::chrono::system_clock::now()};
         if (!execute(ActionFH::EDIT_GROUP, c)) return false;
-        config_.setRecallTimeLimit(limit);
-        return true;
+        return config_.setRecallTimeLimit(limit);
     }
 
     // 变更群配置：QQ 普通成员邀请开关（微信群无此概念，语义上恒为“仅群主”）
@@ -272,6 +276,14 @@ private:
     static const std::string& idOf(const std::shared_ptr<UserFH>& user) {
         static const std::string empty;
         return user ? user->getId() : empty;
+    }
+
+    // 是否为空串或仅由空白字符组成（群名/公告等自由文本的“非空”校验）
+    static bool isBlankText(const std::string& s) {
+        for (char ch : s) {
+            if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') return false;
+        }
+        return true;
     }
 
     GroupMembershipFH& membershipOf(const std::shared_ptr<UserFH>& user) {

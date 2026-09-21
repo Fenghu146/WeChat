@@ -29,6 +29,7 @@ public:
     // 各平台允许发送的消息类型
     static bool supportsKind(PlatformKindFH platform, MessageKindFH kind) {
         if (!isValidPlatformFH(platform)) return false;
+        if (!isValidKindFH(kind)) return false;  // 越界枚举值一律拒绝
         switch (platform) {
             case PlatformKindFH::QQ:
                 return true;  // QQ：全部类型

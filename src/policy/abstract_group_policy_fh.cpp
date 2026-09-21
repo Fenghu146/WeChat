@@ -99,8 +99,9 @@ bool AbstractGroupPolicyFH::checkStateRules(ActionFH action,
     const auto& cfg = context.group->getConfig();
     switch (action) {
     case ActionFH::SEND_MESSAGE:
-        // 被单员禁言的普通成员不能发言
-        if (context.group->isMuted(context.operatorUser) && !isPrivileged(context)) return false;
+        // 被单员禁言的成员不能发言 —— 对所有角色生效（含 ADMIN）：
+        // 若允许特权角色绕过，群主禁言管理员就会“返回成功但毫无效果”。
+        if (context.group->isMuted(context.operatorUser)) return false;
         // 全员禁言期间：普通成员不能发言，ADMIN / OWNER 不受影响
         return isPrivileged(context) || !cfg.isAllMuted();
     case ActionFH::RECALL_MESSAGE:
