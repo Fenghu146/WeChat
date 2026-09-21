@@ -93,7 +93,7 @@ FH_TEST(Comprehensive_UserBasicInfoAndLists) {
     FH_CHECK(gr.joinGroup(*bob,   PlatformKindFH::QQ, "1001"));
     const auto aliceGroups = gr.groupsOfUser(*alice);
     FH_CHECK_EQ(aliceGroups.size(), size_t(1));
-    FH_CHECK(!aliceGroups.empty() && aliceGroups[0]->groupId == "1001");
+    FH_CHECK(!aliceGroups.empty() && aliceGroups[0].groupId == "1001");
 }
 
 // ================================================================
@@ -248,16 +248,16 @@ FH_TEST(Comprehensive_PredefinedGroups1001to1006) {
     FH_CHECK_EQ(wxGroups.size(), size_t(2));
     FH_CHECK_EQ(wbGroups.size(), size_t(2));
     // 群号内容
-    FH_CHECK(gr.findGroup("1001") != nullptr);
-    FH_CHECK(gr.findGroup("1002") != nullptr);
-    FH_CHECK(gr.findGroup("1003") != nullptr);
-    FH_CHECK(gr.findGroup("1004") != nullptr);
-    FH_CHECK(gr.findGroup("1005") != nullptr);
-    FH_CHECK(gr.findGroup("1006") != nullptr);
+    FH_CHECK(gr.findGroup("1001").has_value());
+    FH_CHECK(gr.findGroup("1002").has_value());
+    FH_CHECK(gr.findGroup("1003").has_value());
+    FH_CHECK(gr.findGroup("1004").has_value());
+    FH_CHECK(gr.findGroup("1005").has_value());
+    FH_CHECK(gr.findGroup("1006").has_value());
     // 官方群无群主
     for (const char* id : {"1001","1002","1003","1004","1005","1006"}) {
-        const GroupInfoFH* g = gr.findGroup(id);
-        FH_CHECK(g != nullptr && g->predefined && g->ownerId.empty());
+        const auto g = gr.findGroup(id);
+        FH_CHECK(g.has_value() && g->predefined && g->ownerId.empty());
     }
 }
 
@@ -284,9 +284,10 @@ FH_TEST(Comprehensive_GroupJoinLeaveKickQuery) {
     FH_CHECK(gr.joinGroup(*m2,     PlatformKindFH::QQ, "1007"));
     FH_CHECK(gr.setGroupAdmin(*owner, *admin, "1007", true));
 
-    // 查询群成员
-    const auto* ids = gr.memberIdsOf("1007");
-    FH_CHECK(ids != nullptr && ids->size() == 4);
+    // 查询群成员（按值返回快照；只想拿数量时用 memberCount 更直接）
+    const std::vector<std::string> ids = gr.memberIdsOf("1007");
+    FH_CHECK_EQ(ids.size(), size_t(4));
+    FH_CHECK_EQ(gr.memberCount("1007"), size_t(4));
 
     // 挨踢规则：普通成员不可踢；管理员不可踢群主/同级；群主可踢任何人
     FH_CHECK(!gr.kickMember(*m1, *m2, "1007"));      // 普通成员不可踢
@@ -295,20 +296,20 @@ FH_TEST(Comprehensive_GroupJoinLeaveKickQuery) {
     FH_CHECK(gr.kickMember(*admin, *m2, "1007"));    // 管理员可踢普通成员
     FH_CHECK(gr.kickMember(*owner, *admin, "1007")); // 群主可踢管理员（同时摘除管理员身份）
     FH_CHECK(!gr.isAdminOf(*admin, "1007"));          // 被踢即摘除管理员
-    ids = gr.memberIdsOf("1007");
-    FH_CHECK(ids != nullptr && ids->size() == 2);     // 只剩 owner + m1
+    FH_CHECK_EQ(gr.memberCount("1007"), size_t(2));   // 只剩 owner + m1
+    // ids 是踢人之前取的快照：按值语义它一直有效，内容也不会被后续变更改写
+    FH_CHECK_EQ(ids.size(), size_t(4));
 
     // 退出群
     FH_CHECK(gr.leaveGroup(*m1, "1007"));
     FH_CHECK(!gr.leaveGroup(*m1, "1007"));            // 已退出
-    ids = gr.memberIdsOf("1007");
-    FH_CHECK(ids != nullptr && ids->size() == 1);     // 只剩 owner
+    FH_CHECK_EQ(gr.memberCount("1007"), size_t(1));   // 只剩 owner
 
     // 群主保护：群主不能直接退群，须先转让或解散；非群主不能解散该群
     FH_CHECK(!gr.leaveGroup(*owner, "1007"));
     FH_CHECK(!gr.disbandGroup(*m1, "1007"));
-    ids = gr.memberIdsOf("1007");
-    FH_CHECK(ids != nullptr && ids->size() == 1);     // 群主仍在群内
+    FH_CHECK_EQ(gr.memberCount("1007"), size_t(1));   // 群主仍在群内
+    FH_CHECK(gr.isOwnerOf(*owner, "1007"));
 
     // --- 微信群：推荐加入 + 仅群主可踢 ---
     FH_CHECK(gr.createGroup(*wxO, PlatformKindFH::WeChat, "微信踢人测试群"));  // 1008
@@ -529,8 +530,8 @@ FH_TEST(Comprehensive_PersistenceFullRoundTrip) {
 
         GroupRegistryFH gr;
         FH_CHECK(gr.setPersistencePath(gp));
-        const GroupInfoFH* g7 = gr.findGroup("1007");
-        FH_CHECK(g7 != nullptr);
+        const auto g7 = gr.findGroup("1007");
+        FH_CHECK(g7.has_value());
         if (g7) {
             FH_CHECK_EQ(g7->name, string("断电保存群"));
             FH_CHECK_EQ(g7->ownerId, string("pfull1"));
@@ -539,11 +540,11 @@ FH_TEST(Comprehensive_PersistenceFullRoundTrip) {
         }
         FH_CHECK(gr.isOwnerOf(*a, "1007"));
         FH_CHECK(gr.isOwnerOf(*a, "1008"));
-        const auto* m8 = gr.memberIdsOf("1008");
-        FH_CHECK(m8 != nullptr && m8->size() == 2);
+        const std::vector<std::string> m8 = gr.memberIdsOf("1008");
+        FH_CHECK_EQ(m8.size(), size_t(2));
         // 自建群号续编正常
         FH_CHECK(gr.createGroup(*a, PlatformKindFH::QQ, "续建群"));
-        FH_CHECK(gr.findGroup("1009") != nullptr);
+        FH_CHECK(gr.findGroup("1009").has_value());
     }
 
     std::remove(fp.c_str()); std::remove(gp.c_str()); std::remove(ap.c_str());

@@ -66,8 +66,8 @@ std::string uniquePath(const std::string& tag) {
 
 // 某自然人在注册表中最新的自建群号（groupsOfUser 按目录顺序返回）
 std::string newestGroupId(const GroupRegistryFH& gr, const UserProfileFH& owner) {
-    const std::vector<const GroupInfoFH*> mine = gr.groupsOfUser(owner);
-    return mine.empty() ? std::string("(none)") : mine.back()->groupId;
+    const std::vector<GroupInfoFH> mine = gr.groupsOfUser(owner);
+    return mine.empty() ? std::string("(none)") : mine.back().groupId;
 }
 
 void writeFile(const std::string& path, const std::string& content) {
@@ -315,6 +315,57 @@ FH_TEST(WeChatModeRevokesRetainedAdminPrivileges) {
     FH_CHECK_EQ(g->getConfig().getRecallTimeLimit(), seconds(30));
 }
 
+// 查询接口按值返回（快照语义）：取到的结果在后续建群 / 解散 / 重载存档后
+// 仍然有效且内容不被改写 —— 这是“不再持有内部容器指针/引用”的回归保障。
+FH_TEST(QueryResultsAreSnapshotsNotInternalPointers) {
+    People p;
+    GroupRegistryFH gr;
+    FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::QQ, "快照群", 50));
+    const std::string gid = newestGroupId(gr, *p.a);
+
+    // 取一批快照（旧实现返回的是指向 groups_ 元素的指针/引用）
+    const auto groupSnap = gr.findGroup(gid);
+    const auto listSnap = gr.groupsOfPlatform(PlatformKindFH::QQ);
+    const auto memberSnap = gr.memberIdsOf(gid);
+    const auto chatSnap = gr.chatOf(gid);
+    FH_CHECK(groupSnap.has_value());
+    FH_CHECK_EQ(memberSnap.size(), std::size_t(1));   // 创建者本人
+    FH_CHECK(chatSnap.empty());
+
+    const std::string victim = newestGroupId(gr, *p.a);
+    const auto victimSnap = gr.findGroup(victim);
+    FH_CHECK(victimSnap.has_value());
+
+    // 结构性变更：扩容（vector 重新分配）→ 加成员 / 发消息 → 解散另一个群
+    for (int i = 0; i < 8; ++i)
+        FH_CHECK(gr.createGroup(*p.b, PlatformKindFH::QQ,
+                                "扩容群" + std::to_string(i), 50));
+    FH_CHECK(gr.joinGroup(*p.b, PlatformKindFH::QQ, gid));
+    FH_CHECK(gr.sendGroupMessage(*p.a, PlatformKindFH::QQ, gid,
+                                 MessageKindFH::TEXT, "快照之后的新消息"));
+    const std::string doomed = newestGroupId(gr, *p.b);
+    FH_CHECK(!doomed.empty());
+    FH_CHECK(gr.disbandGroup(*p.b, doomed));
+
+    // 旧快照依然可读，且保持“取快照那一刻”的内容
+    FH_CHECK(groupSnap.has_value());
+    if (groupSnap) {
+        FH_CHECK_EQ(groupSnap->groupId, gid);
+        FH_CHECK_EQ(groupSnap->name, std::string("快照群"));
+        FH_CHECK_EQ(groupSnap->memberIds.size(), std::size_t(1));
+    }
+    FH_CHECK_EQ(memberSnap.size(), std::size_t(1));   // 未被后来的 joinGroup 改写
+    FH_CHECK(chatSnap.empty());                        // 未被后来的发消息改写
+    FH_CHECK(victimSnap.has_value());                  // 快照不因该群被解散而失效
+    if (victimSnap) FH_CHECK(!victimSnap->name.empty());
+    FH_CHECK(!gr.findGroup(doomed).has_value());       // 目录里确实已经移除
+
+    // 重新查询拿到的是最新状态（快照与实时查询互不干扰）
+    FH_CHECK_EQ(gr.memberCount(gid), std::size_t(2));
+    FH_CHECK_EQ(gr.chatCount(gid), std::size_t(1));
+    FH_CHECK(gr.groupsOfPlatform(PlatformKindFH::QQ).size() > listSnap.size());
+}
+
 // ---------------- 2. 平台消息策略边界 ----------------
 
 FH_TEST(MessageKindAndPlatformBoundsAreRejected) {
@@ -336,7 +387,7 @@ FH_TEST(GroupTextLengthBoundaryAtRegistry) {
     People p;
     GroupRegistryFH gr;
     FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::QQ, "长度边界群", 50));
-    const std::string gid = gr.groupsOfUser(*p.a).front()->groupId;
+    const std::string gid = gr.groupsOfUser(*p.a).front().groupId;
 
     const std::size_t limit = PlatformMessagePolicyFH::maxTextLength(PlatformKindFH::QQ);
     FH_CHECK(gr.sendGroupMessage(*p.a, PlatformKindFH::QQ, gid,
@@ -364,7 +415,7 @@ FH_TEST(JoinInviteAndCapacityRulesAtRegistry) {
     // 自建微信群：创建者即群主且自动入群，其他人只能被推荐进来
     FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::WeChat, "自建微信群", 5));
     const std::string wx = "1007";
-    FH_CHECK(gr.findGroup(wx) != nullptr);
+    FH_CHECK(gr.findGroup(wx).has_value());
     FH_CHECK(!gr.inviteIntoGroup(*p.d, *p.b, wx));   // 操作者不是群成员
     FH_CHECK(gr.inviteIntoGroup(*p.a, *p.b, wx));    // 群主推荐好友
     FH_CHECK(!gr.inviteIntoGroup(*p.a, *p.b, wx));   // 目标已在群内
@@ -399,7 +450,7 @@ FH_TEST(WeChatKickRequiresOwnerAndPredefinedGroupIsProtected) {
     // 官方预置群不可解散、不可转让群主
     FH_CHECK(!gr.disbandGroup(*p.a, "1003"));
     FH_CHECK(!gr.transferOwner(*p.a, *p.b, "1003"));
-    FH_CHECK(gr.findGroup("1003") != nullptr);
+    FH_CHECK(gr.findGroup("1003").has_value());
 }
 
 FH_TEST(CreateGroupRejectsInvalidArguments) {
@@ -411,8 +462,8 @@ FH_TEST(CreateGroupRejectsInvalidArguments) {
     const std::size_t before = gr.groupCount();
     FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::QQ, "正常群", 50));
     FH_CHECK_EQ(gr.groupCount(), before + 1);
-    const GroupInfoFH* g = gr.findGroup("1007");  // 自建群号从 1007 起
-    FH_CHECK(g != nullptr);
+    const auto g = gr.findGroup("1007");  // 自建群号从 1007 起
+    FH_CHECK(g.has_value());
     if (g) {
         FH_CHECK_EQ(g->ownerId, std::string("20001"));
         FH_CHECK_EQ(g->memberIds.size(), std::size_t(1));
@@ -458,8 +509,8 @@ FH_TEST(GroupArchiveRoundTripKeepsSpecialCharacters) {
     {
         GroupRegistryFH reloaded;
         FH_CHECK(reloaded.setPersistencePath(path));
-        const GroupInfoFH* g = reloaded.findGroup(gid);
-        FH_CHECK(g != nullptr);
+        const auto g = reloaded.findGroup(gid);
+        FH_CHECK(g.has_value());
         if (g) {
             FH_CHECK_EQ(g->name, weirdName);                     // 群名逐字节还原
             FH_CHECK_EQ(g->memberIds.size(), std::size_t(2));
@@ -490,8 +541,8 @@ FH_TEST(MemberIdsContainingCommaRoundTrip) {
     {
         GroupRegistryFH reloaded;
         FH_CHECK(reloaded.setPersistencePath(path));
-        const GroupInfoFH* g = reloaded.findGroup(gid);
-        FH_CHECK(g != nullptr);
+        const auto g = reloaded.findGroup(gid);
+        FH_CHECK(g.has_value());
         if (g) {
             FH_CHECK_EQ(g->memberIds.size(), std::size_t(1));
             if (g->memberIds.size() == 1) FH_CHECK_EQ(g->memberIds.front(), tricky);
@@ -527,8 +578,8 @@ FH_TEST(CrlfArchiveLoadsCleanly) {
 
     GroupRegistryFH reloaded;
     FH_CHECK(reloaded.setPersistencePath(path));
-    const GroupInfoFH* g = reloaded.findGroup(gid);
-    FH_CHECK(g != nullptr);
+    const auto g = reloaded.findGroup(gid);
+    FH_CHECK(g.has_value());
     if (g) {
         FH_CHECK_EQ(g->name, std::string("换行存档"));      // 群名未带尾部 '\r'
         FH_CHECK_EQ(g->platform, PlatformKindFH::QQ);      // 平台名未带 '\r'
@@ -550,7 +601,7 @@ FH_TEST(CorruptOrUnusableArchiveNeverWipesCurrentData) {
         GroupRegistryFH gr;
         FH_CHECK(!gr.setPersistencePath(path));           // 报告不可用
         FH_CHECK_EQ(gr.groupCount(), std::size_t(6));     // 6 个官方预置群仍在
-        FH_CHECK(gr.findGroup("1001") != nullptr);
+        FH_CHECK(gr.findGroup("1001").has_value());
     }
     std::remove(path.c_str());
     // 2) 空文件
@@ -597,9 +648,9 @@ FH_TEST(ArchiveRejectsIllegalFieldsAndDuplicateGroups) {
     GroupRegistryFH gr;
     FH_CHECK(gr.setPersistencePath(path));
     FH_CHECK_EQ(gr.groupCount(), std::size_t(1));        // 只有 1001 可用
-    FH_CHECK(gr.findGroup("1001") != nullptr);
-    FH_CHECK(gr.findGroup("1008") == nullptr);           // 非法人数上限被丢弃
-    FH_CHECK(gr.findGroup("1009") == nullptr);           // 非数字人数上限被丢弃
+    FH_CHECK(gr.findGroup("1001").has_value());
+    FH_CHECK(!gr.findGroup("1008").has_value());           // 非法人数上限被丢弃
+    FH_CHECK(!gr.findGroup("1009").has_value());           // 非数字人数上限被丢弃
     FH_CHECK_EQ(gr.findGroup("1001")->name, std::string("电影兴趣群"));  // 重复群取首条
     FH_CHECK_EQ(gr.chatOf("1001").size(), std::size_t(0));  // 越界消息类型被丢弃
     std::remove(path.c_str());

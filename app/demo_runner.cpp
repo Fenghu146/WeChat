@@ -596,10 +596,10 @@ void runAutoSocialScenario() {
             friB.setPersistencePath(friendFile);
             GroupRegistryFH grpB;
             grpB.setPersistencePath(groupFile);
-            const GroupInfoFH* saved = grpB.findGroup("1007");
+            const auto saved = grpB.findGroup("1007");   // 按值返回，重启后校验用
             std::cout << "     进程二（模拟重启）：开通恢复 " << a->activatedPlatforms().size()
                       << " 项 / 好友恢复 " << ok(friB.isFriend(*a, *b, PlatformKindFH::QQ))
-                      << " / 群恢复 " << ok(saved != nullptr) << "\n";
+                      << " / 群恢复 " << ok(saved.has_value()) << "\n";
             if (saved) {
                 fh_ui::Rows rows;
                 rows.add("群 " + saved->groupId + "「" + saved->name + "」",

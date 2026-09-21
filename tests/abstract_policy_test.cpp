@@ -190,7 +190,7 @@ FH_TEST(SendIsCommonButGroupEditingIsPlatformGated) {
     auto wx = rig.wx();
     QQPolicyFH qPol;
     WeChatPolicyFH wPol;
-    auto sendOf = [&](GroupFH& g, GroupPolicyFH& pol,
+    auto sendOf = [&](GroupFH& g, GroupPolicyFH& /*pol*/,
                       const shared_ptr<UserFH>& who) {
         auto m = make_shared<MessageFH>("m" + std::to_string(++msgSeq), who, "hi");
         return ctx(g, who, nullptr, m);

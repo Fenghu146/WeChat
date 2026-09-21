@@ -99,17 +99,18 @@ FH_TEST(PredefinedOfficialGroupsExistOnEveryPlatform) {
     FH_CHECK_EQ(gr.groupsOfPlatform(PlatformKindFH::QQ).size(), std::size_t(2));
     FH_CHECK_EQ(gr.groupsOfPlatform(PlatformKindFH::WeChat).size(), std::size_t(2));
     FH_CHECK_EQ(gr.groupsOfPlatform(PlatformKindFH::Weibo).size(), std::size_t(2));
-    const GroupInfoFH* g = gr.findGroup("1003");
-    FH_CHECK(g != nullptr);
+    const auto g = gr.findGroup("1003");   // 按值返回：可安全持有
+    FH_CHECK(g.has_value());
     if (g) FH_CHECK_EQ(g->platform, PlatformKindFH::WeChat);
 
     // 预置群初始成员注入：仅对空成员的预置群生效，且幂等（非空后不再动作）
     FH_CHECK(gr.ensurePredefinedMembers("1003", {"wx-88-0001", "wx-88-0002"}));
-    const auto* ids = gr.memberIdsOf("1003");
-    FH_CHECK(ids != nullptr && ids->size() == 2);
+    const std::vector<std::string> ids = gr.memberIdsOf("1003");
+    FH_CHECK_EQ(ids.size(), std::size_t(2));
     FH_CHECK(!gr.ensurePredefinedMembers("1003", {"wx-88-0003"}));  // 非空 → 不动作
-    FH_CHECK(gr.memberIdsOf("1003") != nullptr &&
-             gr.memberIdsOf("1003")->size() == 2);
+    FH_CHECK_EQ(gr.memberCount("1003"), std::size_t(2));
+    FH_CHECK(gr.isMember("1003", "wx-88-0001"));
+    FH_CHECK(!gr.isMember("1003", "wx-88-0003"));
     // 非预置群 / 不存在的群：不注入
     FH_CHECK(!gr.ensurePredefinedMembers("1007", {"wx-88-0001"}));
 }
@@ -131,16 +132,16 @@ FH_TEST(CreateGroupAutoAssignsNumberFrom1007) {
     People p;
     GroupRegistryFH gr;
     FH_CHECK(gr.createGroup(*p.xm, PlatformKindFH::QQ, "自建开发群"));
-    const GroupInfoFH* g = gr.findGroup("1007");
-    FH_CHECK(g != nullptr);
+    const auto g = gr.findGroup("1007");
+    FH_CHECK(g.has_value());
     if (g) FH_CHECK_EQ(g->ownerId, std::string("10001"));
     FH_CHECK(gr.createGroup(*p.xm, PlatformKindFH::QQ, "再建一个"));
-    FH_CHECK(gr.findGroup("1008") != nullptr);
+    FH_CHECK(gr.findGroup("1008").has_value());
     FH_CHECK(!gr.createGroup(*p.luren, PlatformKindFH::WeChat, "无微信建群"));  // 缺平台账号
     auto userGroups = gr.groupsOfUser(*p.xm);
     bool found1007 = false;
-    for (const GroupInfoFH* u : userGroups)
-        if (u->groupId == "1007") found1007 = true;
+    for (const GroupInfoFH& u : userGroups)
+        if (u.groupId == "1007") found1007 = true;
     FH_CHECK(found1007);
 
     // 群主退群保护 / 解散 / 转让（与聚合根 GroupFH 口径一致）
@@ -152,7 +153,7 @@ FH_TEST(CreateGroupAutoAssignsNumberFrom1007) {
     FH_CHECK(gr.transferOwner(*p.xm, *p.hong, "1007"));    // 群主转让成功
     FH_CHECK(!gr.disbandGroup(*p.xm, "1007"));     // 已非群主，不可解散
     FH_CHECK(gr.disbandGroup(*p.hong, "1007"));    // 新群主可解散
-    FH_CHECK(gr.findGroup("1007") == nullptr);     // 解散后从目录移除
+    FH_CHECK(gr.findGroup("1007") == std::nullopt);     // 解散后从目录移除
 }
 
 // ---------------- 群消息扩展（阶段 D） ----------------
