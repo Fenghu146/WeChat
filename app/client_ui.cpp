@@ -1098,25 +1098,22 @@ void runLocalChat(const LocalSlot& slot) {
 // 阶段 C/D：官方群 / 自建群（群注册表）会话窗口
 // ============================================================
 
-// 注意：findGroup 返回的是指向群注册表内部元素的指针，建群 / 解散群会让它失效。
-// 本文件的使用约定：拿到 info 后只在“本次迭代内、且不发生结构性变更”时使用；
-// 任何解散 / 建群之后不得再解引用旧指针（要么继续循环重新取，要么先把需要的
-// 字段拷出来）。runOfficialChat 的 groupId 按值传递，也是为了避免调用方把
-// 内部元素的成员引用绑进来后因解散而悬空。
-const GroupInfoFH* findOfficial(const std::string& groupId) {
+// 注意：群注册表的查询接口已改为【按值返回】，这里拿到的是独立快照，可以放心
+// 在会话里持有；群目录的结构性变更（建群 / 解散）不会让它失效。
+std::optional<GroupInfoFH> findOfficial(const std::string& groupId) {
     return g.official.findGroup(groupId);
 }
 
 // 官方群发送失败原因：与 PlatformMessagePolicyFH 规则一致
-std::string officialSendReason(const GroupInfoFH* info,
+std::string officialSendReason(const GroupInfoFH& infoRef,
                                const ProfilePtr& op, MessageKindFH kind,
                                const std::string& content, bool asReply) {
-    const auto pl = info->platform;
+    const auto pl = infoRef.platform;
     const auto senderId = op->platformAccountId(pl);
     if (senderId.empty())
         return "你没有该平台的账号，无法在" + platCn(pl) + "群发言";
     bool isMember = false;
-    for (const auto& id : info->memberIds)
+    for (const auto& id : infoRef.memberIds)
         if (id == senderId) isMember = true;
     if (!isMember) return "你尚未加入本群，请先 [加入群]";
     if (!PlatformMessagePolicyFH::supportsKind(pl, kind)) {
@@ -1139,11 +1136,11 @@ std::string officialSendReason(const GroupInfoFH* info,
     return {};
 }
 
-// groupId 按值传递：调用方常写成 runOfficialChat(hits[i]->groupId)，若按 const&
-// 绑定到注册表内部元素，一旦本会话内解散该群就会悬空引用。
+// groupId 按值传递：调用方常写成 runOfficialChat(hits[i])，若按 const& 绑定到
+// 注册表内部元素，一旦本会话内解散该群就会悬空引用。
 void runOfficialChat(std::string groupId) {
     for (;;) {
-        const GroupInfoFH* info = findOfficial(groupId);
+        const auto info = findOfficial(groupId);   // 按值返回，可安全持有
         if (!info) {
             noticeFail("群不存在（可能已被移除）。");
             return;
@@ -1269,7 +1266,7 @@ void runOfficialChat(std::string groupId) {
             }
             busy("消息发送");
             const std::string reason =
-                officialSendReason(info, g.me, kind, *text, wantReply);
+                officialSendReason(*info, g.me, kind, *text, wantReply);
             if (!reason.empty()) {
                 noticeFail(reason);
                 continue;
@@ -1350,11 +1347,10 @@ void runOfficialChat(std::string groupId) {
                 continue;
             }
             busy("解散处理");
-            // 解散会把该群从注册表移除，info 随即失效 —— 提示文案要用的群名
-            // 必须先拷贝成独立字符串，再做解散（否则是悬空解引用）。
-            const std::string groupName = info->name;
+            // info 是注册表的按值快照，解散（从目录移除）不会让它失效，
+            // 因此这里可以安全地用它的群名拼提示。
             if (g.official.disbandGroup(*g.me, groupId)) {
-                noticeOK("已解散「" + groupName + "」，该群已从群列表移除。");
+                noticeOK("已解散「" + info->name + "」，该群已从群列表移除。");
                 return;
             }
             noticeFail("解散失败：仅群主可解散自建群。");
@@ -1549,10 +1545,10 @@ void runConversationList() {
                                  "）"});
     }
     // 官方群 / 自建官方群
-    for (const GroupInfoFH* gi : g.official.groupsOfUser(*g.me)) {
-        items.push_back(Item{ConvKind::Official, gi->groupId,
-                             "官方群 · " + platCn(gi->platform) + " · " +
-                                 gi->name + "（群号 " + gi->groupId + "）"});
+    for (const GroupInfoFH& gi : g.official.groupsOfUser(*g.me)) {
+        items.push_back(Item{ConvKind::Official, gi.groupId,
+                             "官方群 · " + platCn(gi.platform) + " · " +
+                                 gi.name + "（群号 " + gi.groupId + "）"});
     }
     // QQ 临时讨论组
     for (const auto& d : g.discs) {
@@ -1625,7 +1621,7 @@ void createOfficialGroupInHall() {
     busy("建群处理");
     if (g.official.createGroup(*g.me, pl, *name)) {
         const auto list = g.official.groupsOfPlatform(pl);
-        const std::string nid = list.back()->groupId;
+        const std::string nid = list.back().groupId;
         noticeOK("创建成功：群号 " + nid + "，你已自动成为群主。");
         runOfficialChat(nid);
     } else {
@@ -1643,25 +1639,23 @@ void runHall() {
         const auto& groups = g.official;
         std::vector<std::string> labels;
         std::vector<fh_ui::MenuItem> groupItems;
-        std::vector<const GroupInfoFH*> hits;
+        std::vector<std::string> hits;   // 只存群号，避免持有内部元素的指针
         for (const auto pl :
              {PlatformKindFH::QQ, PlatformKindFH::WeChat, PlatformKindFH::Weibo}) {
-            for (const GroupInfoFH* gi : groups.groupsOfPlatform(pl)) {
+            for (const GroupInfoFH& gi : groups.groupsOfPlatform(pl)) {
                 const std::string myId = g.me->platformAccountId(pl);
-                bool joined = false;
-                if (!myId.empty())
-                    for (const auto& id : gi->memberIds)
-                        if (id == myId) joined = true;
+                // 按值返回的快照，直接用 isMember 判断，无需自己遍历成员表
+                const bool joined = !myId.empty() && groups.isMember(gi.groupId, myId);
                 const std::string label =
-                    "[" + platCn(pl) + " 群号 " + gi->groupId + "] " + gi->name +
-                    (gi->predefined ? "（官方）" : "（自建）") + " 成员 " +
-                    std::to_string(gi->memberIds.size()) + "/" +
-                    std::to_string(gi->maxMembers) +
+                    "[" + platCn(pl) + " 群号 " + gi.groupId + "] " + gi.name +
+                    (gi.predefined ? "（官方）" : "（自建）") + " 成员 " +
+                    std::to_string(gi.memberIds.size()) + "/" +
+                    std::to_string(gi.maxMembers) +
                     (joined ? "  ［我已加入］" : "");
                 labels.push_back(label);
                 groupItems.push_back(fh_ui::MenuItem{
                     static_cast<char>('1' + static_cast<int>(labels.size()) - 1), label});
-                hits.push_back(gi);
+                hits.push_back(gi.groupId);
             }
         }
         // 动态编号：群序号 1..n，建群键 n+1，避免与群序号冲突
@@ -1682,7 +1676,7 @@ void runHall() {
                 continue;
             }
             if (k >= '1' && k <= static_cast<char>('0' + labels.size())) {
-                runOfficialChat(hits[static_cast<std::size_t>(k - '1')]->groupId);
+                runOfficialChat(hits[static_cast<std::size_t>(k - '1')]);
                 continue;
             }
             if (k != 0) noticeFail("无效按键：" + std::string(1, k));
@@ -1699,7 +1693,7 @@ void runHall() {
             createOfficialGroupInHall();
             continue;
         }
-        runOfficialChat(hits[static_cast<std::size_t>(sel - 1)]->groupId);
+        runOfficialChat(hits[static_cast<std::size_t>(sel - 1)]);
     }
 }
 
@@ -2488,7 +2482,7 @@ bool runWorkspace() {
             const auto u = actorFor(g.me, slot.platform);
             if (u && !slot.group->isDisbanded() && slot.group->contains(u)) ++nLocal;
         }
-        for (const GroupInfoFH* gi : g.official.groupsOfUser(*g.me))
+        for (const GroupInfoFH& gi : g.official.groupsOfUser(*g.me))
             (void)gi, ++nOfficial;
         for (const auto& d : g.discs)
             if (!d->isDisbanded() && d->contains(g.me->getQQId())) ++nDisc;

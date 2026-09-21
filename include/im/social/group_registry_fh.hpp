@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <exception>
 #include <fstream>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <string>
@@ -266,44 +267,58 @@ public:
     }
 
     // ---------- 查询 ----------
-    const GroupInfoFH* findGroup(const std::string& groupId) const {
+    // 设计约定：查询接口一律【按值返回】，返回值不引用内部容器。
+    // 原因：群目录是 std::vector<GroupInfoFH>，createGroup 会 push_back、
+    // disbandGroup / loadFromFile 会 erase/整体替换 —— 若返回指针或引用，
+    // 调用方只要把结果多留一会儿就会悬空（此前 app/client_ui.cpp 的解散
+    // 提示就踩过）。按值返回让“取出来的东西一直有效”，代价是拷贝若干小对象。
+    std::optional<GroupInfoFH> findGroup(const std::string& groupId) const {
         for (const GroupInfoFH& g : groups_)
-            if (g.groupId == groupId) return &g;
-        return nullptr;
+            if (g.groupId == groupId) return g;
+        return std::nullopt;
     }
     // 某平台下的全部群
-    std::vector<const GroupInfoFH*> groupsOfPlatform(PlatformKindFH p) const {
-        std::vector<const GroupInfoFH*> result;
+    std::vector<GroupInfoFH> groupsOfPlatform(PlatformKindFH p) const {
+        std::vector<GroupInfoFH> result;
         for (const GroupInfoFH& g : groups_)
-            if (g.platform == p) result.push_back(&g);
+            if (g.platform == p) result.push_back(g);
         return result;
     }
     // 某自然人的“群列表”（任务书：用户信息含群列表），
     // 按其各平台账号分别匹配已加入的群。
-    std::vector<const GroupInfoFH*> groupsOfUser(const UserProfileFH& user) const {
-        std::vector<const GroupInfoFH*> result;
+    std::vector<GroupInfoFH> groupsOfUser(const UserProfileFH& user) const {
+        std::vector<GroupInfoFH> result;
         for (const GroupInfoFH& g : groups_) {
-            const std::string memberId =
-                user.platformAccountId(g.platform);
+            const std::string memberId = user.platformAccountId(g.platform);
             if (!memberId.empty() && containsMember(g, memberId))
-                result.push_back(&g);
+                result.push_back(g);
         }
         return result;
     }
     // 查询群成员（任务书 3.(2)）：返回该群成员账号号码列表
-    const std::vector<std::string>* memberIdsOf(const std::string& groupId) const {
-        const GroupInfoFH* g = findGroup(groupId);
-        return g ? &g->memberIds : nullptr;
+    std::vector<std::string> memberIdsOf(const std::string& groupId) const {
+        const auto g = findGroup(groupId);
+        return g ? g->memberIds : std::vector<std::string>{};
+    }
+    // 某自然人是否为某群成员 / 某群成员数（避免为了判断而整表拷贝）
+    bool isMember(const std::string& groupId, const std::string& memberId) const {
+        if (memberId.empty()) return false;
+        const auto g = findGroup(groupId);
+        return g && containsMember(*g, memberId);
+    }
+    std::size_t memberCount(const std::string& groupId) const {
+        const auto g = findGroup(groupId);
+        return g ? g->memberIds.size() : 0;
     }
     // 某自然人是否为某群群主
     bool isOwnerOf(const UserProfileFH& user, const std::string& groupId) const {
-        const GroupInfoFH* g = findGroup(groupId);
+        const auto g = findGroup(groupId);
         if (!g || g->ownerId.empty()) return false;
         return g->ownerId == user.platformAccountId(g->platform);
     }
     // 某自然人是否为某群管理员（QQ 群管理员制度）
     bool isAdminOf(const UserProfileFH& user, const std::string& groupId) const {
-        const GroupInfoFH* g = findGroup(groupId);
+        const auto g = findGroup(groupId);
         if (!g) return false;
         return containsId(g->adminIds, user.platformAccountId(g->platform));
     }
@@ -311,12 +326,14 @@ public:
     static constexpr std::size_t kMaxChatRecordsFH = 50;
     // 存档中群人数上限的合法上界（拒绝负数/超界值，防止溢出或超大局）
     static constexpr std::size_t kMaxGroupMembersFH = 100000;
-    // 某群的聊天记录（只读；群不存在返回空）
-    const std::vector<GroupChatRecordFH>& chatOf(
-        const std::string& groupId) const {
-        for (const GroupInfoFH& g : groups_)
-            if (g.groupId == groupId) return g.chat;
-        return emptyChat();
+    // 某群的聊天记录（只读快照；群不存在返回空）
+    std::vector<GroupChatRecordFH> chatOf(const std::string& groupId) const {
+        const auto g = findGroup(groupId);
+        return g ? g->chat : std::vector<GroupChatRecordFH>{};
+    }
+    std::size_t chatCount(const std::string& groupId) const {
+        const auto g = findGroup(groupId);
+        return g ? g->chat.size() : 0;
     }
     std::size_t groupCount() const noexcept { return groups_.size(); }
 
@@ -423,10 +440,6 @@ private:
         addPredefined(PlatformKindFH::WeChat, "1004", "同事群");
         addPredefined(PlatformKindFH::Weibo, "1005", "旅行分享群");
         addPredefined(PlatformKindFH::Weibo, "1006", "读书打卡群");
-    }
-    static const std::vector<GroupChatRecordFH>& emptyChat() {
-        static const std::vector<GroupChatRecordFH> empty;
-        return empty;
     }
     void addPredefined(PlatformKindFH p, const std::string& id,
                        const std::string& name) {

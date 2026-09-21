@@ -84,7 +84,7 @@ FH_TEST(Doc_1_1_UserBasicInfoAndLists) {
     FH_CHECK(gr.joinGroup(*u, PlatformKindFH::QQ, "1001"));
     const auto groupsOfU = gr.groupsOfUser(*u);
     FH_CHECK_EQ(groupsOfU.size(), size_t(1));
-    FH_CHECK(!groupsOfU.empty() && groupsOfU[0]->groupId == "1001");
+    FH_CHECK(!groupsOfU.empty() && groupsOfU[0].groupId == "1001");
 }
 
 // 文档 2.(1)：好友信息添加、修改（备注）、删除、查询
@@ -220,8 +220,8 @@ FH_TEST(Doc_3_1_PredefinedGroups) {
         {"1005", PlatformKindFH::Weibo}, {"1006", PlatformKindFH::Weibo},
     };
     for (const auto& [id, plat] : expect) {
-        const GroupInfoFH* g = gr.findGroup(id);
-        FH_CHECK(g != nullptr);
+        const auto g = gr.findGroup(id);
+        FH_CHECK(g.has_value());
         if (g) {
             FH_CHECK(g->predefined);
             FH_CHECK_EQ(g->platform, plat);
@@ -254,8 +254,8 @@ FH_TEST(Doc_3_2_3_3_GroupJoinKickQueryAndAdmin) {
     FH_CHECK(gr.isOwnerOf(*owner, "1007"));
 
     // 查询群成员
-    const std::vector<std::string>* ids = gr.memberIdsOf("1007");
-    FH_CHECK(ids != nullptr && ids->size() == 4);
+    const std::vector<std::string> ids = gr.memberIdsOf("1007");
+    FH_CHECK_EQ(ids.size(), size_t(4));
 
     // 挨踢矩阵（QQ 群：群主 > 管理员 > 普通成员）
     FH_CHECK(!gr.kickMember(*m1, *m2, "1007"));   // 普通成员不可踢
@@ -263,8 +263,8 @@ FH_TEST(Doc_3_2_3_3_GroupJoinKickQueryAndAdmin) {
     FH_CHECK(!gr.kickMember(*admin, *owner, "1007")); // 不可踢群主
     FH_CHECK(gr.kickMember(*owner, *admin, "1007"));  // 群主可踢管理员
     FH_CHECK(!gr.isAdminOf(*admin, "1007"));          // 被踢即摘除管理
-    ids = gr.memberIdsOf("1007");
-    FH_CHECK(ids != nullptr && ids->size() == 2);
+    // 快照按值持有，重新查询用 memberCount 更直接
+        FH_CHECK_EQ(gr.memberCount("1007"), size_t(2));
 
     // 微信群：仅群主可踢（微信群仅有群主为特权账号）
     FH_CHECK(gr.createGroup(*wxOwner, PlatformKindFH::WeChat, "微信踢人群"));  // 1008
@@ -417,8 +417,8 @@ FH_TEST(Doc_6_1_PersistenceRoundTrip) {
         // 群成员信息（目录/群主/管理员/成员/聊天记录）与群号续编
         GroupRegistryFH gr;
         FH_CHECK(gr.setPersistencePath(groupPath));
-        const GroupInfoFH* g7 = gr.findGroup("1007");
-        FH_CHECK(g7 != nullptr);
+        const auto g7 = gr.findGroup("1007");
+        FH_CHECK(g7.has_value());
         if (g7) {
             FH_CHECK_EQ(g7->name, string("持久化群"));
             FH_CHECK_EQ(g7->ownerId, string("p001"));
@@ -426,11 +426,11 @@ FH_TEST(Doc_6_1_PersistenceRoundTrip) {
         }
         FH_CHECK(gr.isOwnerOf(*a, "1007"));
         FH_CHECK(gr.isOwnerOf(*a, "1008"));
-        const auto* m8 = gr.memberIdsOf("1008");
-        FH_CHECK(m8 != nullptr && m8->size() == 2);
+        const std::vector<std::string> m8 = gr.memberIdsOf("1008");
+        FH_CHECK_EQ(m8.size(), size_t(2));
         // 自建群号从“现有最大群号+1”继续
         FH_CHECK(gr.createGroup(*a, PlatformKindFH::QQ, "续建群"));
-        FH_CHECK(gr.findGroup("1009") != nullptr);
+        FH_CHECK(gr.findGroup("1009").has_value());
     }
 
     // —— 作用域三：容器实例化时读入（构造即加载，任务书优化(2)） ——
@@ -446,11 +446,11 @@ FH_TEST(Doc_6_1_PersistenceRoundTrip) {
         GroupRegistryFH gr(groupPath);
         FH_CHECK(fr.isFriend(*a, *b, PlatformKindFH::QQ));
         FH_CHECK(fr.isFriend(*a, *b, PlatformKindFH::WeChat));
-        const GroupInfoFH* g7 = gr.findGroup("1007");
-        FH_CHECK(g7 != nullptr);
+        const auto g7 = gr.findGroup("1007");
+        FH_CHECK(g7.has_value());
         if (g7) FH_CHECK_EQ(g7->ownerId, string("p001"));
         FH_CHECK(gr.isOwnerOf(*a, "1007"));
-        FH_CHECK(gr.findGroup("1009") != nullptr);  // 作用域二的续建群已写回
+        FH_CHECK(gr.findGroup("1009").has_value());  // 作用域二的续建群已写回
     }
 
     std::remove(friendPath.c_str());
