@@ -17,16 +17,15 @@
 // 断电保存（任务书 6.(1)、优化(2)）：好友信息可在容器配置时读
 // 入（setPersistencePath）、析构时写回（saveToFile/loadFromFile）。
 // 演示规模下关系以线性表存储，查询 O(n)，不做过度设计。
+//
+// 声明与实现分离：方法实现位于 src/social/friend_registry_fh.cpp。
 // ============================================================
-#include <algorithm>
-#include <fstream>
-#include <ostream>
+#include <cstddef>
 #include <string>
 #include <vector>
 
 #include "im/platform/platform_kind_fh.hpp"
 #include "im/platform/user_profile_fh.hpp"
-#include "im/platform/persist_util_fh.hpp"
 #include "im/platform/user_registry_fh.hpp"
 #include "im/social/friend_ship_fh.hpp"
 
@@ -35,144 +34,55 @@ public:
     FriendRegistryFH() = default;
 
     // 实例化时读入（任务书优化(2)字面口径）：构造即从文件加载
-    explicit FriendRegistryFH(const std::string& persistPath) {
-        persistPath_ = persistPath;
-        loadFromFile(persistPath);
-    }
+    explicit FriendRegistryFH(const std::string& persistPath);
 
     // 断电保存：若配置了持久化文件，析构时写回（任务书优化(2)）
-    ~FriendRegistryFH() {
-        if (!persistPath_.empty()) saveToFile(persistPath_);
-    }
+    ~FriendRegistryFH();
 
     // 配置持久化文件：配置（实例化）时立即读入，此后析构自动写回
-    bool setPersistencePath(const std::string& path) {
-        persistPath_ = path;
-        return loadFromFile(path);
-    }
+    bool setPersistencePath(const std::string& path);
 
     // QQ / 微信：将两人加为双向好友
     bool makeFriends(const UserProfileFH& a, const UserProfileFH& b,
-                     PlatformKindFH platform) {
-        if (platform == PlatformKindFH::Weibo) return false;  // 微博请走关注
-        return addBothWays(a, b, platform, /*mutual=*/true);
-    }
+                     PlatformKindFH platform);
 
     // 删除 QQ / 微信双向好友（成对删除）
     bool unfriend(const UserProfileFH& a, const UserProfileFH& b,
-                  PlatformKindFH platform) {
-        const std::string aId = a.platformAccountId(platform);
-        const std::string bId = b.platformAccountId(platform);
-        if (aId.empty() || bId.empty() || aId == bId) return false;
-        const FriendShipFH* edge = findEdge(aId, bId, platform);
-        if (!edge || !edge->mutual) return false;  // 不是双向好友
-        eraseEdge(aId, bId, platform);
-        eraseEdge(bId, aId, platform);
-        return true;
-    }
+                  PlatformKindFH platform);
 
     // 好友信息修改（任务书 2.(1)）：设置好友备注名。
     // 仅双向好友可备注（微博关注不是好友，不支持备注）。
     bool setRemark(const UserProfileFH& owner, const UserProfileFH& peer,
-                   PlatformKindFH platform, const std::string& remark) {
-        if (platform == PlatformKindFH::Weibo) return false;
-        const std::string oId = owner.platformAccountId(platform);
-        const std::string pId = peer.platformAccountId(platform);
-        if (oId.empty() || pId.empty() || oId == pId) return false;
-        FriendShipFH* edge = findMutableEdge(oId, pId, platform);
-        if (!edge || !edge->mutual) return false;
-        edge->remark = remark;
-        return true;
-    }
+                   PlatformKindFH platform, const std::string& remark);
 
     // 查询备注名（非好友或未设置返回空串）
     std::string remarkOf(const UserProfileFH& owner, const UserProfileFH& peer,
-                         PlatformKindFH platform) const {
-        const std::string oId = owner.platformAccountId(platform);
-        const std::string pId = peer.platformAccountId(platform);
-        const FriendShipFH* edge = findEdge(oId, pId, platform);
-        return (edge && edge->mutual) ? edge->remark : std::string();
-    }
+                         PlatformKindFH platform) const;
 
     // 微博：a 单向关注 b
-    bool follow(const UserProfileFH& a, const UserProfileFH& b) {
-        if (a.platformAccountId(PlatformKindFH::Weibo).empty() ||
-            b.platformAccountId(PlatformKindFH::Weibo).empty())
-            return false;
-        return addOneWay(a, b, PlatformKindFH::Weibo);
-    }
+    bool follow(const UserProfileFH& a, const UserProfileFH& b);
 
     // 微博：取消关注
-    bool unfollow(const UserProfileFH& a, const UserProfileFH& b) {
-        const std::string aId = a.platformAccountId(PlatformKindFH::Weibo);
-        const std::string bId = b.platformAccountId(PlatformKindFH::Weibo);
-        if (aId.empty() || bId.empty() || aId == bId) return false;
-        const FriendShipFH* edge = findEdge(aId, bId, PlatformKindFH::Weibo);
-        if (!edge || edge->mutual) return false;
-        eraseEdge(aId, bId, PlatformKindFH::Weibo);
-        return true;
-    }
+    bool unfollow(const UserProfileFH& a, const UserProfileFH& b);
 
     // ---------- 查询 ----------
     // 两人在该平台是否互为好友
     bool isFriend(const UserProfileFH& a, const UserProfileFH& b,
-                  PlatformKindFH platform) const {
-        const std::string aId = a.platformAccountId(platform);
-        const std::string bId = b.platformAccountId(platform);
-        const FriendShipFH* edge = findEdge(aId, bId, platform);
-        return edge && edge->mutual;
-    }
+                  PlatformKindFH platform) const;
     // a 是否在微博关注了 b
-    bool isFollowing(const UserProfileFH& a, const UserProfileFH& b) const {
-        const std::string aId = a.platformAccountId(PlatformKindFH::Weibo);
-        const std::string bId = b.platformAccountId(PlatformKindFH::Weibo);
-        return findEdge(aId, bId, PlatformKindFH::Weibo) != nullptr;
-    }
+    bool isFollowing(const UserProfileFH& a, const UserProfileFH& b) const;
     // 某人在某平台的“好友”列表（仅双向好友；微博好友为空、用关注查询）
     std::vector<std::string> friendIds(const UserProfileFH& user,
-                                       PlatformKindFH platform) const {
-        const std::string id = user.platformAccountId(platform);
-        std::vector<std::string> result;
-        for (const FriendShipFH& e : edges_)
-            if (e.platform == platform && e.ownerId == id && e.mutual)
-                result.push_back(e.peerId);
-        return result;
-    }
+                                       PlatformKindFH platform) const;
     // 某人在微博的“关注”列表
-    std::vector<std::string> followingIds(const UserProfileFH& user) const {
-        const std::string id = user.platformAccountId(PlatformKindFH::Weibo);
-        std::vector<std::string> result;
-        for (const FriendShipFH& e : edges_)
-            if (e.platform == PlatformKindFH::Weibo && e.ownerId == id &&
-                !e.mutual)
-                result.push_back(e.peerId);
-        return result;
-    }
+    std::vector<std::string> followingIds(const UserProfileFH& user) const;
     // 共同好友（任务书 2.(2)）：两人在该平台好友列表的交集
     std::vector<std::string> commonFriends(const UserProfileFH& a,
                                            const UserProfileFH& b,
-                                           PlatformKindFH platform) const {
-        std::vector<std::string> fa = friendIds(a, platform);
-        std::vector<std::string> fb = friendIds(b, platform);
-        std::sort(fa.begin(), fa.end());
-        std::sort(fb.begin(), fb.end());
-        std::vector<std::string> result;
-        std::set_intersection(fa.begin(), fa.end(), fb.begin(), fb.end(),
-                              std::back_inserter(result));
-        return result;
-    }
+                                           PlatformKindFH platform) const;
     // 微博“共同关注”：两人关注列表的交集
     std::vector<std::string> commonFollowing(const UserProfileFH& a,
-                                             const UserProfileFH& b) const {
-        std::vector<std::string> fa = followingIds(a);
-        std::vector<std::string> fb = followingIds(b);
-        std::sort(fa.begin(), fa.end());
-        std::sort(fb.begin(), fb.end());
-        std::vector<std::string> result;
-        std::set_intersection(fa.begin(), fa.end(), fb.begin(), fb.end(),
-                              std::back_inserter(result));
-        return result;
-    }
+                                             const UserProfileFH& b) const;
 
     // ---------- 跨服务推荐添加好友（任务书 2.(2)、6.(3)） ----------
     // other 是否可由 fromPlatform 的好友关系推荐为 toPlatform 好友：
@@ -184,170 +94,52 @@ public:
     //   5) 在 toPlatform 尚不是好友。
     bool isRecommendable(const UserProfileFH& user, const UserProfileFH& other,
                          PlatformKindFH fromPlatform,
-                         PlatformKindFH toPlatform) const {
-        if (fromPlatform == toPlatform) return false;
-        if (!user.isActivated(fromPlatform) || !user.isActivated(toPlatform))
-            return false;  // 本人须已开通来源与目标服务（6.(3)）
-        if (!user.hasPlatformAccount(toPlatform) ||
-            !other.hasPlatformAccount(toPlatform))
-            return false;
-        if (!isFriend(user, other, fromPlatform)) return false;
-        return !isFriend(user, other, toPlatform);
-    }
+                         PlatformKindFH toPlatform) const;
 
     // 依据 fromPlatform 上的好友关系，把 other 添加为 toPlatform 好友
     //（如：微信可以添加 QQ 推荐好友 —— QQ 已是好友 → 微信一键添加）
     bool addFriendFromRecommendation(const UserProfileFH& user,
                                      const UserProfileFH& other,
                                      PlatformKindFH fromPlatform,
-                                     PlatformKindFH toPlatform) {
-        if (!isRecommendable(user, other, fromPlatform, toPlatform))
-            return false;
-        return makeFriends(user, other, toPlatform);
-    }
+                                     PlatformKindFH toPlatform);
 
     // 推荐列表：遍历注册中心，给出 user 可在 toPlatform 依据
     // fromPlatform 好友关系推荐添加的全部自然人。
     std::vector<const UserProfileFH*> recommendFriendsFrom(
         const UserProfileFH& user, const UserRegistryFH& registry,
-        PlatformKindFH fromPlatform, PlatformKindFH toPlatform) const {
-        std::vector<const UserProfileFH*> result;
-        for (const auto& other : registry.allProfiles()) {
-            if (other.get() == &user) continue;
-            if (isRecommendable(user, *other, fromPlatform, toPlatform))
-                result.push_back(other.get());
-        }
-        return result;
-    }
+        PlatformKindFH fromPlatform, PlatformKindFH toPlatform) const;
 
-    std::size_t edgeCount() const noexcept { return edges_.size(); }
+    std::size_t edgeCount() const noexcept;
 
     // ---------- 断电保存（好友信息） ----------
     // 行格式：F ␟ 平台 ␟ ownerId ␟ peerId ␟ mutual ␟ 备注(转义)
     // 采用原子写（先写 .tmp 再替换），写失败时保留原存档并返回 false。
-    bool saveToFile(const std::string& path) const {
-        persist_util_fh::AtomicWriterFH writer(path);
-        if (!writer.ok()) return false;
-        std::ostream& out = writer.stream();
-        for (const FriendShipFH& e : edges_) {
-            out << 'F'
-                << persist_util_fh::kFieldSepFH
-                << persist_util_fh::platformName(e.platform)
-                << persist_util_fh::kFieldSepFH
-                << e.ownerId
-                << persist_util_fh::kFieldSepFH
-                << e.peerId
-                << persist_util_fh::kFieldSepFH
-                << (e.mutual ? 1 : 0)
-                << persist_util_fh::kFieldSepFH
-                << persist_util_fh::escapeTextFH(e.remark) << '\n';
-        }
-        return writer.commit();
-    }
+    bool saveToFile(const std::string& path) const;
 
     // 从文件恢复好友关系（文件不存在返回 false，保持现状）。
     // 容错口径：单行损坏跳过；重复边（同平台同方向）去重；
     // 若文件有内容却一条都没解析出来（被截断/格式不符），返回 false 并
     // 保持当前关系，避免用空集合覆盖既有好友数据。
-    bool loadFromFile(const std::string& path) {
-        std::ifstream in(path, std::ios::binary);
-        if (!in) return false;
-        std::vector<FriendShipFH> loaded;
-        std::string line;
-        bool sawContent = false;
-        while (std::getline(in, line)) {
-            if (line.empty()) continue;
-            sawContent = true;
-            std::vector<std::string> f = persist_util_fh::splitFieldsFH(line);
-            if (f.size() < 6 || f[0] != "F") continue;
-            FriendShipFH e;
-            if (!persist_util_fh::platformFromName(f[1], e.platform)) continue;
-            if (f[2].empty() || f[3].empty()) continue;  // 端点缺失的边无意义
-            e.ownerId = f[2];
-            e.peerId = f[3];
-            e.mutual = f[4] == "1";
-            e.remark = persist_util_fh::unescapeTextFH(f[5]);
-            if (containsEdge(loaded, e)) continue;  // 去重，防止重复计数
-            loaded.push_back(std::move(e));
-        }
-        if (loaded.empty() && sawContent) return false;  // 有内容但全不可用：保持现状
-        edges_ = std::move(loaded);
-        return true;
-    }
+    bool loadFromFile(const std::string& path);
 
 private:
     // 通用校验：目标平台、双方拥有该平台账号、非自己、无重复
     bool checkTargets(const UserProfileFH& a, const UserProfileFH& b,
-                      PlatformKindFH platform) const {
-        if (!isValidPlatformFH(platform) ||
-            platform == PlatformKindFH::COUNT)
-            return false;
-        const std::string aId = a.platformAccountId(platform);
-        const std::string bId = b.platformAccountId(platform);
-        if (aId.empty() || bId.empty() || aId == bId) return false;
-        return findEdge(aId, bId, platform) == nullptr;
-    }
-
+                      PlatformKindFH platform) const;
     bool addOneWay(const UserProfileFH& a, const UserProfileFH& b,
-                   PlatformKindFH platform) {
-        if (!checkTargets(a, b, platform)) return false;
-        edges_.emplace_back(platform, a.platformAccountId(platform),
-                            b.platformAccountId(platform), /*mutual=*/false);
-        return true;
-    }
-
+                   PlatformKindFH platform);
     bool addBothWays(const UserProfileFH& a, const UserProfileFH& b,
-                     PlatformKindFH platform, bool mutual) {
-        if (!checkTargets(a, b, platform)) return false;
-        const std::string aId = a.platformAccountId(platform);
-        const std::string bId = b.platformAccountId(platform);
-        // 反向边可能因存档残缺而单独存在：已有则不再重复插入，
-        // 否则会凭空多出一条重复关系。
-        if (findEdge(bId, aId, platform)) return false;
-        edges_.emplace_back(platform, aId, bId, mutual);
-        edges_.emplace_back(platform, bId, aId, mutual);
-        return true;
-    }
-
+                     PlatformKindFH platform, bool mutual);
     static bool containsEdge(const std::vector<FriendShipFH>& list,
-                             const FriendShipFH& e) {
-        for (const FriendShipFH& x : list)
-            if (x.platform == e.platform && x.ownerId == e.ownerId &&
-                x.peerId == e.peerId)
-                return true;
-        return false;
-    }
-
+                             const FriendShipFH& e);
     const FriendShipFH* findEdge(const std::string& owner,
                                  const std::string& peer,
-                                 PlatformKindFH platform) const {
-        for (const FriendShipFH& e : edges_)
-            if (e.platform == platform && e.ownerId == owner &&
-                e.peerId == peer)
-                return &e;
-        return nullptr;
-    }
-
+                                 PlatformKindFH platform) const;
     FriendShipFH* findMutableEdge(const std::string& owner,
                                   const std::string& peer,
-                                  PlatformKindFH platform) {
-        for (FriendShipFH& e : edges_)
-            if (e.platform == platform && e.ownerId == owner &&
-                e.peerId == peer)
-                return &e;
-        return nullptr;
-    }
-
+                                  PlatformKindFH platform);
     void eraseEdge(const std::string& owner, const std::string& peer,
-                   PlatformKindFH platform) {
-        edges_.erase(
-            std::remove_if(edges_.begin(), edges_.end(),
-                           [&](const FriendShipFH& e) {
-                               return e.platform == platform &&
-                                      e.ownerId == owner && e.peerId == peer;
-                           }),
-            edges_.end());
-    }
+                   PlatformKindFH platform);
 
     std::vector<FriendShipFH> edges_;  // 全部好友/关注关系
     std::string persistPath_;          // 断电保存文件（空=未启用）

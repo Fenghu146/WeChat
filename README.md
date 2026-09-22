@@ -1,7 +1,7 @@
 # QQ / 微信 / 微博 群组管理课程设计（C++）
 
 > 《2026 面向对象程序课程设计》个人课程设计实现（类名按任务书要求加姓名缩写 FH）
-> 技术栈：C++17 · CMake · MSVC / g++（头文件主体，仅策略实现位于 `src/policy`）
+> 技术栈：C++17 · CMake · MSVC / g++（声明在 `include/`，实现集中在 `src/`）
 > 核心主题：用面向对象设计承载“多产品（微X）体系”与平台行为差异
 > —— 群管理主体统一，平台差异由策略（Strategy + Template Method）表达。
 
@@ -34,19 +34,25 @@ include/im/
 ├── context/    授权上下文：Action（枚举）、GroupContext
 ├── policy/     策略：GroupPolicy（接口）、AbstractGroupPolicy（六步模板方法）、QQPolicy、WeChatPolicy
 ├── platform/   微X 产品：PlatformKind（枚举）、UserProfile（自然人档案）、AccountInfo、UserRegistry、
-│               ActivationManager、LoginManager、PersistUtil（存档行式转义工具）
+│               ActivationManager、LoginManager
+├── util/       持久化工具：PersistUtil（存档行式转义工具）
 ├── social/     社交：FriendRegistry（好友/关注）、FriendShip、GroupRegistry（群目录/群聊）、
 │               GroupInfo、GroupChatRecord、DiscussionGroup（QQ 临时讨论组）
 └── message/    消息扩展：MessageKind（枚举）、PlatformMessagePolicy（平台消息能力规则）
 src/
-└── policy/     策略实现源文件（abstract_group_policy / qq_policy / wechat_policy）
+├── model/      聚合根实现（group_fh.cpp）
+├── social/     注册表实现（group_registry_fh / friend_registry_fh）
+└── policy/     策略实现（abstract_group_policy / qq_policy / wechat_policy）
 app/
 ├── main.cpp        程序入口（默认进手动工作台，--demo 走自动演示）
-├── client_ui.hpp   手动工作台入口声明
-├── client_ui.cpp   手动测试工作台实现（数字键操作 + 分屏展示 + 错误反馈）
-├── demo_runner.hpp --demo 自动演示入口声明
-└── demo_runner.cpp  A→D 全流程自动演示（逐场景自带“应失败”校验）
-tests/              11 个回归套件（共 123 个用例）+ 自包含断言框架 fh_mini_test.hpp
+└── ui/             终端界面子系统
+    ├── client_ui.hpp / client_ui_internal.hpp  工作台接口与内部共享声明
+    ├── client_ui_*.cpp                         按业务界面拆分的工作台实现（10 个模块）
+    ├── demo_runner.hpp / demo_runner.cpp       --demo 全流程自动演示（逐场景自带“应失败”校验）
+    └── ui_screen.hpp / ui_screen.cpp           共用终端排版（标题栏 / 键值卡片 / 菜单列 / 整帧重绘）
+docs/              课程原始任务书（2026-面向对象程序课程设计.md / .docx）
+reports/           项目文档（索引见 reports/README.md）
+tests/             11 个回归套件（共 123 个用例）+ 自包含断言框架 fh_mini_test.hpp
 
 运行期生成（已加入 .gitignore）：save_activation_fh.dat / save_friends_fh.dat / save_groups_fh.dat
 ```

@@ -27,7 +27,7 @@
 #include "im/model/group_role_fh.hpp"
 #include "im/model/message_fh.hpp"
 #include "im/model/user_fh.hpp"
-#include "im/platform/persist_util_fh.hpp"
+#include "im/util/persist_util_fh.hpp"
 #include "im/platform/platform_kind_fh.hpp"
 #include "im/platform/user_profile_fh.hpp"
 #include "im/platform/user_registry_fh.hpp"

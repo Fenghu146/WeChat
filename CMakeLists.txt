@@ -10,16 +10,34 @@ if(MSVC)
     add_compile_options(/utf-8)
 endif()
 
-# 核心库：策略框架实现（其余类型均为头文件内联实现）
+# 核心库：领域模型 / 社交注册表 / 策略框架的实现源文件
+#（其余类型为头文件内联实现）
 add_library(im_core_fh
+    src/model/group_fh.cpp
+    src/social/group_registry_fh.cpp
+    src/social/friend_registry_fh.cpp
     src/policy/abstract_group_policy_fh.cpp
     src/policy/qq_policy_fh.cpp
     src/policy/wechat_policy_fh.cpp)
 target_include_directories(im_core_fh PUBLIC include)
 
-# 控制台演示程序：main 负责自动演示(--demo)入口，client_ui 实现手动测试工作台
-# ui_screen 提供共用的终端排版能力（标题栏/键值卡片/菜单列/整帧重绘）
-add_executable(demo_fh app/main.cpp app/client_ui.cpp app/demo_runner.cpp app/ui_screen.cpp)
+# 控制台演示程序：main 负责自动演示(--demo)入口，app/ui/ 实现终端界面子系统
+#   client_ui_* 为手动测试工作台（按业务界面拆分）；demo_runner 为自动演示；
+#   ui_screen 提供共用的终端排版能力（标题栏/键值卡片/菜单列/整帧重绘）
+set(FH_UI_SOURCES
+    app/ui/ui_screen.cpp
+    app/ui/demo_runner.cpp
+    app/ui/client_ui_terminal.cpp
+    app/ui/client_ui_state.cpp
+    app/ui/client_ui_local_chat.cpp
+    app/ui/client_ui_official_chat.cpp
+    app/ui/client_ui_conversations.cpp
+    app/ui/client_ui_hall.cpp
+    app/ui/client_ui_accounts.cpp
+    app/ui/client_ui_contacts.cpp
+    app/ui/client_ui_create.cpp
+    app/ui/client_ui_workspace.cpp)
+add_executable(demo_fh app/main.cpp ${FH_UI_SOURCES})
 target_link_libraries(demo_fh PRIVATE im_core_fh)
 
 # ============================================================

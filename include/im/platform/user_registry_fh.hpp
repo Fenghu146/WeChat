@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "im/platform/account_info_fh.hpp"
-#include "im/platform/persist_util_fh.hpp"
+#include "im/util/persist_util_fh.hpp"
 #include "im/platform/platform_kind_fh.hpp"
 #include "im/platform/user_profile_fh.hpp"
 

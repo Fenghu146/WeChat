@@ -10,9 +10,9 @@
 #include <iostream>
 #include <string>
 
-#include "demo_runner.hpp"
-#include "client_ui.hpp"
-#include "ui_screen.hpp"
+#include "ui/demo_runner.hpp"
+#include "ui/client_ui.hpp"
+#include "ui/ui_screen.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
