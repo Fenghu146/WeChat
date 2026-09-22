@@ -264,9 +264,9 @@ FH_TEST(AllMuteOwnerCanSpeakBothPlatforms) {
     // Owner 在两种平台均可发言
     FH_CHECK(qq->sendMessage(ownerQ, make_shared<MessageFH>("q1", ownerQ, "owner qq")));
     FH_CHECK(wx->sendMessage(ownerW, make_shared<MessageFH>("w1", ownerW, "owner wx")));
-    // Admin 在两种平台均可发言
+    // Admin 仅 QQ 群可发言（微信群仅群主为特权账号，管理员不豁免全员禁言）
     FH_CHECK(qq->sendMessage(adminQ, make_shared<MessageFH>("q2", adminQ, "admin qq")));
-    FH_CHECK(wx->sendMessage(adminW, make_shared<MessageFH>("w2", adminW, "admin wx")));
+    FH_CHECK(!wx->sendMessage(adminW, make_shared<MessageFH>("w2", adminW, "admin wx")));
     // Member 在两种平台均不能发言
     FH_CHECK(!qq->sendMessage(memberQ, make_shared<MessageFH>("q3", memberQ, "member qq")));
     FH_CHECK(!wx->sendMessage(memberW, make_shared<MessageFH>("w3", memberW, "member wx")));

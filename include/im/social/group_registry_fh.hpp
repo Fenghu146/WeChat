@@ -142,7 +142,8 @@ public:
     std::size_t groupCount() const noexcept;
 
     // ---------- 断电保存（群成员信息） ----------
-    // 行格式：G 行=群目录；M 行=群聊消息记录。字段以 0x1F 分隔。
+    // 行格式：G 行=群目录；M 行=群聊消息记录；I 行=已注入过初始成员的
+    // 预置群号（幂等标记，防止重启后把退群成员重新塞回）。字段以 0x1F 分隔。
     // 采用原子写（先写 .tmp 再替换），写失败时保留原存档并返回 false。
     bool saveToFile(const std::string& path) const;
 

@@ -14,6 +14,15 @@
 #include "im/message/platform_message_policy_fh.hpp"
 #include "im/util/persist_util_fh.hpp"
 
+namespace {
+// 是否为空串或仅由空白字符组成（与 GroupFH::isBlankText 同口径）
+bool isBlankText(const std::string& s) {
+    for (char ch : s)
+        if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') return false;
+    return true;
+}
+}  // namespace
+
 GroupRegistryFH::GroupRegistryFH() {
     seedPredefined();
 }
@@ -118,7 +127,8 @@ bool GroupRegistryFH::leaveGroup(const UserProfileFH& user,
     for (auto it = ids.begin(); it != ids.end(); ++it) {
         if (*it == memberId) {
             ids.erase(it);
-            return true;
+            removeId(g->adminIds, memberId);  // 退群同时摘除管理员身份（与被踢一致），
+            return true;                      // 否则重新入群会“自动官复原职”
         }
     }
     return false;
@@ -164,6 +174,7 @@ bool GroupRegistryFH::sendGroupMessage(const UserProfileFH& user,
     if (!g || g->platform != platform) return false;
     const std::string senderId = user.platformAccountId(platform);
     if (senderId.empty() || !containsMember(*g, senderId)) return false;
+    if (isBlankText(content)) return false;  // 空内容/全空白无业务含义
     if (!PlatformMessagePolicyFH::supportsKind(platform, kind)) return false;
     if (content.size() > PlatformMessagePolicyFH::maxTextLength(platform))
         return false;
@@ -180,7 +191,11 @@ bool GroupRegistryFH::createGroup(const UserProfileFH& owner,
                                   PlatformKindFH platform,
                                   const std::string& name,
                                   std::size_t maxMembers) {
-    if (name.empty() || maxMembers == 0) return false;
+    // 与 loadFromFile 的 parseCount 上界对称：超上限的群建得成功、存档也
+    // 写得进去，但重启时整群（含成员与聊天记录）会被静默丢弃 —— 必须在
+    // 入口就拒绝。群名同 editGroup 口径拒绝全空白。
+    if (isBlankText(name) || maxMembers == 0 ||
+        maxMembers > kMaxGroupMembersFH) return false;
     const std::string ownerId = owner.platformAccountId(platform);
     if (ownerId.empty()) return false;
     GroupInfoFH g;
@@ -314,6 +329,10 @@ bool GroupRegistryFH::saveToFile(const std::string& path) const {
                 << m.sentAt.time_since_epoch().count() << '\n';
         }
     }
+    // I 行：已注入过初始成员的预置群号 —— 幂等标记随存档持久化，
+    // 否则“注入 → 全员退群 → 重启”会把成员重新塞回，违背幂等承诺
+    for (const std::string& gid : presetInjected_)
+        out << 'I' << kFieldSepFH << gid << '\n';
     return writer.commit();
 }
 
@@ -321,6 +340,7 @@ bool GroupRegistryFH::loadFromFile(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return false;
     std::vector<GroupInfoFH> loaded;
+    std::set<std::string> injected;  // 存档中的预置群注入标记（I 行）
     std::string line;
     while (std::getline(in, line)) {
         if (line.empty()) continue;
@@ -359,7 +379,13 @@ bool GroupRegistryFH::loadFromFile(const std::string& path) {
                     std::chrono::system_clock::duration(
                         std::chrono::system_clock::duration::rep(
                             std::stoll(f[7]))));
+                // 存档被手工编辑/部分损坏时可能带超上限记录：载入即裁剪，
+                // 与 sendGroupMessage 的淘汰口径一致（保最新、丢最早）
+                if (g.chat.size() >= kMaxChatRecordsFH) g.chat.erase(g.chat.begin());
                 g.chat.push_back(std::move(m));
+            } else if (f[0] == "I" && f.size() >= 2 && !f[1].empty()) {
+                // I 行：已注入过初始成员的预置群号（幂等标记）
+                injected.insert(f[1]);
             }
         } catch (const std::exception&) {
             continue;  // 跳过损坏行：存档被截断/篡改不应导致启动崩溃
@@ -367,6 +393,7 @@ bool GroupRegistryFH::loadFromFile(const std::string& path) {
     }
     if (loaded.empty()) return false;  // 无可信内容：保持现状，不覆盖
     groups_ = std::move(loaded);
+    presetInjected_ = std::move(injected);  // 注入标记随存档恢复
     rebuildNextGroupNo();
     return true;
 }

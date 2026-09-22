@@ -42,6 +42,8 @@ protected:
     bool checkTargetPermission(ActionFH action, const GroupContextFH& context) const;
     bool checkStateRules(ActionFH action, const GroupContextFH& context) const;
 
-    // 是否管理员/群主（特权角色）
-    bool isPrivileged(const GroupContextFH& context) const;
+    // 是否管理员/群主（特权角色）。默认 ADMIN+；微信群“仅有群主为特权账号”
+    //（任务书 3.(3)），由 WeChatPolicyFH 覆写收窄为仅 OWNER —— 影响
+    // checkStateRules 中全员禁言豁免与代撤他人消息两条路径。
+    virtual bool isPrivileged(const GroupContextFH& context) const;
 };

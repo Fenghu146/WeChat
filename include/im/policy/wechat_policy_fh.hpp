@@ -14,4 +14,7 @@
 class WeChatPolicyFH final : public AbstractGroupPolicyFH {
 protected:
     bool checkPlatformRule(ActionFH action, const GroupContextFH& context) const override;
+
+    // 微信群仅群主为特权账号：管理员不豁免全员禁言、不可代撤他人消息
+    bool isPrivileged(const GroupContextFH& context) const override;
 };

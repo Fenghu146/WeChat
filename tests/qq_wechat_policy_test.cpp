@@ -92,16 +92,29 @@ FH_TEST(SetAllMutePlatformDifference) {
     FH_CHECK(pair.wx->getConfig().isAllMuted());
 }
 
-// 全员禁言期间：普通成员两平台都不能发言；管理员两平台都能发言
+// 全员禁言期间：普通成员两平台都不能发言；管理员仅 QQ 群可发言
+//（微信群仅有群主为特权账号 —— 管理员不豁免，任务书 3.(3)）
 FH_TEST(AllMuteAffectsBothPlatformsEqually) {
     GroupPair pair;
     FH_CHECK(pair.qq->setAllMute(pair.owner, true));
     FH_CHECK(pair.wx->setAllMute(pair.owner, true));
     FH_CHECK(!pair.qq->sendMessage(pair.member, msgs("a1", pair.member)));
     FH_CHECK(!pair.wx->sendMessage(pair.member, msgs("a2", pair.member)));
-    FH_CHECK(pair.qq->sendMessage(pair.admin, msgs("a3", pair.admin)));
-    FH_CHECK(pair.wx->sendMessage(pair.admin, msgs("a4", pair.admin)));
+    FH_CHECK(pair.qq->sendMessage(pair.admin, msgs("a3", pair.admin)));    // QQ 管理员：豁免
+    FH_CHECK(!pair.wx->sendMessage(pair.admin, msgs("a4", pair.admin)));   // 微信管理员：不豁免
     FH_CHECK(pair.qq->sendMessage(pair.owner, msgs("a5", pair.owner)));
+    FH_CHECK(pair.wx->sendMessage(pair.owner, msgs("a6", pair.owner)));    // 微信群主：豁免
+}
+
+// 代撤他人消息：QQ 群管理员可代撤；微信群仅群主可代撤
+FH_TEST(ProxyRecallPlatformDifference) {
+    GroupPair pair;
+    FH_CHECK(pair.qq->sendMessage(pair.member, msgs("q1", pair.member)));
+    FH_CHECK(pair.wx->sendMessage(pair.member, msgs("w1", pair.member)));
+    FH_CHECK(pair.qq->recallMessage(pair.admin, "q1"));    // QQ：管理员可代撤
+    FH_CHECK(!pair.wx->recallMessage(pair.admin, "w1"));  // 微信：管理员不可代撤
+    FH_CHECK(pair.wx->recallMessage(pair.owner, "w1"));   // 微信：仅群主可代撤
+    FH_CHECK(pair.wx->messages().back()->isRecalled());
 }
 
 // 踢人 / 禁言权限差异：

@@ -97,29 +97,47 @@ public:
         return writer.commit();
     }
 
-    // 按存档重建开通情况：先清空所有档案的开通状态，再逐行应用存档。
+    // 按存档重建开通情况：整体解析后再提交（与 FriendRegistryFH 同模式）。
     // 若只做“叠加”，从存档里删掉的服务在重启后依然保持开通（只增不减），
     // 与“实例化时读入”的语义不符。
+    // 容错口径：文件有内容却解析不出任何可用行（空文件 / 被截断 / 全是垃圾）
+    // 时视为损坏 —— 保持现状并返回 false，绝不用垃圾行把全部开通状态抹掉。
     bool loadActivatedFromFile(const std::string& path) {
         std::ifstream in(path, std::ios::binary);
         if (!in) return false;
+        // 暂存：QQ 主号 → 该自然人应开通的平台集合
+        std::unordered_map<std::string, std::set<PlatformKindFH>> staged;
+        bool fileEmpty = true;
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty()) continue;
+            fileEmpty = false;
+            if (line[0] != 'A') continue;
+            std::vector<std::string> f = persist_util_fh::splitFieldsFH(line);
+            if (f.size() < 2) continue;
+            ProfilePtr user = findByQQId(f[1]);
+            if (!user) continue;  // 档案未注册则跳过
+            std::set<PlatformKindFH>& plats = staged[f[1]];
+            for (std::size_t i = 2; i < f.size(); ++i) {
+                PlatformKindFH plat;
+                if (persist_util_fh::platformFromName(f[i], plat))
+                    plats.insert(plat);
+            }
+        }
+        if (!fileEmpty && staged.empty())
+            return false;  // 有内容却零可用行：损坏，保持现状
+        // 提交：先清空再应用暂存结果（空文件=保存时无人注册，合法清空）。
+        // 注意 activatedPlatforms() 返回引用，删除元素会使 range-for 的迭代器
+        // 失效 —— 必须先拷贝快照再逐项移除。
         for (const ProfilePtr& p : users_) {
             if (!p) continue;
             const std::set<PlatformKindFH> current = p->activatedPlatforms();
             for (PlatformKindFH plat : current) p->removeActivated(plat);
         }
-        std::string line;
-        while (std::getline(in, line)) {
-            if (line.empty() || line[0] != 'A') continue;
-            std::vector<std::string> f = persist_util_fh::splitFieldsFH(line);
-            if (f.size() < 2) continue;
-            ProfilePtr user = findByQQId(f[1]);
-            if (!user) continue;  // 档案未注册则跳过
-            for (std::size_t i = 2; i < f.size(); ++i) {
-                PlatformKindFH plat;
-                if (persist_util_fh::platformFromName(f[i], plat))
-                    user->addActivated(plat);
-            }
+        for (const auto& kv : staged) {
+            ProfilePtr user = findByQQId(kv.first);
+            if (!user) continue;
+            for (PlatformKindFH plat : kv.second) user->addActivated(plat);
         }
         return true;
     }

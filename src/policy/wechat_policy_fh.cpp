@@ -46,3 +46,11 @@ bool WeChatPolicyFH::checkPlatformRule(ActionFH action,
         return true;
     }
 }
+
+// 微信群“仅有群主为特权账号”：全员禁言豁免与代撤他人消息两项特权
+// 同样收窄为仅群主 —— 从 QQ 群切换而来、仍保留 ADMIN 角色的成员
+// 不再享有这两项待遇（与本策略头注释的任务书 3.(3) 口径一致）。
+bool WeChatPolicyFH::isPrivileged(const GroupContextFH& context) const {
+    const auto role = context.group->getRole(context.operatorUser);
+    return role && *role == GroupRoleFH::OWNER;
+}

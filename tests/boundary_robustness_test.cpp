@@ -732,6 +732,151 @@ FH_TEST(SaveToUnwritablePathFailsAndKeepsExistingArchive) {
     std::remove(good.c_str());
 }
 
+// ---------------- 5. 边界审查增补（阶段 F） ----------------
+
+// 管理员退群后管理员身份必须一并摘除（与被踢 kickMember / 转让群主
+// transferOwner 的处理一致），否则重新入群会“自动官复原职”。
+FH_TEST(AdminWhoLeavesLosesAdminRoleAndDoesNotRegainOnRejoin) {
+    People p;
+    GroupRegistryFH gr;
+    FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::QQ, "退群摘管理", 50));
+    const std::string gid = newestGroupId(gr, *p.a);
+    FH_CHECK(gr.joinGroup(*p.b, PlatformKindFH::QQ, gid));
+    FH_CHECK(gr.setGroupAdmin(*p.a, *p.b, gid, true));
+    FH_CHECK(gr.isAdminOf(*p.b, gid));
+
+    FH_CHECK(gr.leaveGroup(*p.b, gid));
+    FH_CHECK(!gr.isMember(gid, "20002"));
+    FH_CHECK(!gr.isAdminOf(*p.b, gid));   // 管理员身份随退群一并摘除
+
+    // 重新入群只是普通成员，不得“官复原职”
+    FH_CHECK(gr.joinGroup(*p.b, PlatformKindFH::QQ, gid));
+    FH_CHECK(gr.isMember(gid, "20002"));
+    FH_CHECK(!gr.isAdminOf(*p.b, gid));
+}
+
+// 群消息内容为空或全空白时必须拒绝（与 GroupFH::sendMessage 拒绝空内容、
+// editGroup 拒绝全空白群名同口径），且不得落任何聊天记录。
+FH_TEST(GroupMessageRejectsBlankContent) {
+    People p;
+    GroupRegistryFH gr;
+    FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::QQ, "空白消息群", 50));
+    const std::string gid = newestGroupId(gr, *p.a);
+    FH_CHECK(!gr.sendGroupMessage(*p.a, PlatformKindFH::QQ, gid,
+                                  MessageKindFH::TEXT, ""));
+    FH_CHECK(!gr.sendGroupMessage(*p.a, PlatformKindFH::QQ, gid,
+                                  MessageKindFH::TEXT, " \t\r\n "));
+    FH_CHECK_EQ(gr.chatCount(gid), std::size_t(0));
+}
+
+// 建群参数边界：全空白群名拒绝；人数上限与存档解析共用同一上界
+// （kMaxGroupMembersFH），否则“建群成功、重启后被静默丢弃”。
+FH_TEST(CreateGroupBoundariesMatchArchiveBounds) {
+    People p;
+    GroupRegistryFH gr;
+    FH_CHECK(!gr.createGroup(*p.a, PlatformKindFH::QQ, "   ", 50));   // 全空白群名
+    FH_CHECK(!gr.createGroup(*p.a, PlatformKindFH::QQ, "超上限群",
+                            GroupRegistryFH::kMaxGroupMembersFH + 1));
+    const std::size_t before = gr.groupCount();
+    FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::QQ, "恰达上限群",
+                            GroupRegistryFH::kMaxGroupMembersFH));
+    FH_CHECK(gr.createGroup(*p.a, PlatformKindFH::QQ, "单人群", 1));
+    FH_CHECK_EQ(gr.groupCount(), before + 2);
+}
+
+// 开通存档被写坏（有内容却解析不出任何可用行）时，必须保持现状并返回
+// false，不得“先清空全部开通状态再让垃圾行吞掉”。
+FH_TEST(CorruptedActivationArchiveKeepsState) {
+    const std::string path = uniquePath("act_bad");
+    People p;
+    FH_CHECK(p.a->addActivated(PlatformKindFH::QQ));
+    FH_CHECK(p.a->addActivated(PlatformKindFH::Weibo));
+    FH_CHECK(p.reg.saveActivatedToFile(path));
+
+    writeFile(path, "garbage\n@@@###\n");
+    FH_CHECK(!p.reg.loadActivatedFromFile(path));      // 报告不可用
+    FH_CHECK(p.a->isActivated(PlatformKindFH::QQ));    // 开通状态原样保留
+    FH_CHECK(p.a->isActivated(PlatformKindFH::Weibo));
+    std::remove(path.c_str());
+}
+
+// 存档中的群聊记录超过上限（kMaxChatRecordsFH=50）时，载入后必须裁剪到
+// 上限并淘汰最早记录 —— 否则该群容量永远回不到上限。
+FH_TEST(OversizedChatArchiveTrimmedOnLoad) {
+    const std::string sep(1, pu::kFieldSepFH);
+    const std::string path = uniquePath("grp_over");
+    std::ostringstream ss;
+    ss << 'G' << sep << "QQ" << sep << "1001" << sep << "超记录群" << sep << ""
+       << sep << 50 << sep << 1 << sep << "-" << sep << "-" << '\n';
+    for (int i = 1; i <= 60; ++i)
+        ss << 'M' << sep << "1001" << sep << 0 << sep << "20001" << sep << "甲"
+           << sep << "m" << i << sep << 0 << sep << i << '\n';
+    writeFile(path, ss.str());
+
+    GroupRegistryFH gr;
+    FH_CHECK(gr.setPersistencePath(path));
+    FH_CHECK_EQ(gr.chatCount("1001"), GroupRegistryFH::kMaxChatRecordsFH);
+    const auto chat = gr.chatOf("1001");
+    if (chat.size() == GroupRegistryFH::kMaxChatRecordsFH) {
+        FH_CHECK_EQ(chat.front().content, std::string("m11"));  // 最早 10 条被淘汰
+        FH_CHECK_EQ(chat.back().content, std::string("m60"));
+    }
+    std::remove(path.c_str());
+}
+
+// 预置群“已注入过”标记随存档持久化：注入 → 全员退群 → 重启后不得把成员
+// 重新塞回（头文件承诺的幂等语义跨进程成立）。
+FH_TEST(PresetInjectionMarkerSurvivesRestart) {
+    const std::string path = uniquePath("grp_inject");
+    {
+        People p;
+        GroupRegistryFH gr(path);
+        FH_CHECK(gr.ensurePredefinedMembers("1003", {"wx-a", "wx-b"}));
+        FH_CHECK(gr.leaveGroup(*p.a, "1003"));
+        FH_CHECK(gr.leaveGroup(*p.b, "1003"));
+        FH_CHECK_EQ(gr.findGroup("1003")->memberIds.size(), std::size_t(0));
+    }  // 析构写回存档（含已注入标记）
+    {
+        People p;
+        GroupRegistryFH reloaded(path);
+        FH_CHECK_EQ(reloaded.findGroup("1003")->memberIds.size(), std::size_t(0));
+        FH_CHECK(!reloaded.ensurePredefinedMembers("1003", {"wx-a", "wx-b"}));
+        FH_CHECK_EQ(reloaded.findGroup("1003")->memberIds.size(),
+                    std::size_t(0));  // 没有被重新注入
+    }
+    std::remove(path.c_str());
+}
+
+// 微信模式下管理员不享受“特权账号”待遇：全员禁言期间不可发言（仅群主豁免）、
+// 不可代撤他人消息（仅群主可代撤）—— 与任务书 3.(3)“微信群仅有群主为特权
+// 账号”一致。
+FH_TEST(WeChatAdminNotExemptFromAllMuteNorProxyRecall) {
+    auto owner = mkUser("o1");
+    auto admin = mkUser("a1");
+    auto member = mkUser("m1");
+    GroupConfigFH cfg(50, false, false, seconds(120));
+    auto g = make_shared<GroupFH>("b-wxadm", 1001, "微信管理员", cfg,
+                                  make_shared<QQPolicyFH>(), owner);
+    FH_CHECK(g->inviteMember(owner, admin));
+    FH_CHECK(g->inviteMember(owner, member));
+    FH_CHECK(g->setAdmin(owner, admin, true));
+    FH_CHECK(g->sendMessage(member, mkMsg("m1", member, "成员消息")));
+
+    // 切到微信模式：管理员身份保留，但特权一律按微信口径解释
+    FH_CHECK(g->switchPolicy(make_shared<WeChatPolicyFH>()));
+
+    FH_CHECK(g->setAllMute(owner, true));
+    FH_CHECK(!g->sendMessage(admin, mkMsg("ma", admin, "管理员发言")));  // 不豁免管理员
+    FH_CHECK(!g->sendMessage(member, mkMsg("mm", member, "成员发言")));
+    FH_CHECK(g->sendMessage(owner, mkMsg("mo", owner, "群主发言")));    // 仅群主豁免
+
+    // 代撤他人消息：微信群仅群主可代撤
+    FH_CHECK(!g->recallMessage(admin, "m1"));
+    FH_CHECK(!g->messages().front()->isRecalled());
+    FH_CHECK(g->recallMessage(owner, "m1"));
+    FH_CHECK(g->messages().front()->isRecalled());
+}
+
 }  // namespace
 
 int main() { return ::fhtest::runAll("boundary-robustness"); }
