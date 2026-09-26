@@ -108,7 +108,7 @@ std::string manageMemberFailReason(const LocalSlot& slot, const UserPtr& op,
 void runGroupSettings(LocalSlot& live) {
     GroupFH& grp = *live.group;
     for (;;) {
-        const UserPtr meUser = actorFor(g.me, live.platform);
+        const UserPtr meUser = localActorFor(g.me, live);
 
         fh_ui::Screen s("群设置：" + grp.getName());
         drawAccountCard(s);
@@ -171,17 +171,12 @@ void runGroupSettings(LocalSlot& live) {
 // —— 以群内其他成员的身份继续操作（验证不同角色的权限差异）——
 bool switchActorInGroup(const LocalSlot& live) {
     GroupFH& grp = *live.group;
-    const UserPtr cur = actorFor(g.me, live.platform);
+    const UserPtr cur = localActorFor(g.me, live);
     std::vector<std::string> labels;
     std::vector<ProfilePtr> hits;
     for (const auto& u : sortedMembers(grp)) {
         if (cur && u->getId() == cur->getId()) continue;  // 跳过自己
-        ProfilePtr p = nullptr;
-        for (const auto& q : g.people)
-            if (q->platformAccountId(live.platform) == u->getId()) {
-                p = q;
-                break;
-            }
+        ProfilePtr p = profileOfMember(u);
         if (!p) continue;
         labels.push_back(std::string(zhRole(*grp.getRole(u))) + " " +
                          p->getNickname() + "（" + u->getId() + "）");
@@ -205,7 +200,7 @@ bool switchActorInGroup(const LocalSlot& live) {
 bool runLocalMore(LocalSlot& live) {
     GroupFH& grp = *live.group;
     for (;;) {
-        const UserPtr meUser = actorFor(g.me, live.platform);
+        const UserPtr meUser = localActorFor(g.me, live);
 
         fh_ui::Screen s("更多操作：" + grp.getName() + "（" +
                         platCn(live.platform) + " 管理模式）");
@@ -266,9 +261,9 @@ bool runLocalMore(LocalSlot& live) {
             const std::size_t before = grp.members().size();
             if (grp.switchPolicy(nextPolicy)) {
                 live.platform = next;
-                noticeOK("已切换为「" + platCn(next) +
-                         "」管理模式，成员数不变（" + std::to_string(before) +
-                         " 人），数据未受影响。");
+                noticeOK("已切换为「" + platCn(next) + "」管理模式，成员数据不变（" +
+                         std::to_string(before) +
+                         " 人）；群内操作身份按成员的入群账号自动匹配。");
             } else {
                 noticeFail("切换失败（群已解散或策略无效）。");
             }
@@ -377,7 +372,9 @@ void runLocalChat(const LocalSlot& slot) {
 
     for (;;) {
         // 每轮重算“我”：切换操作身份或切换管理模式后即时生效
-        const UserPtr meUser = actorFor(sess.me, live.platform);
+        //（localActorFor 会回退到本人任一平台在群内的成员身份，
+        //  切换管理模式后群主/管理员不会被误判成“非成员”）
+        const UserPtr meUser = localActorFor(sess.me, live);
         const auto& msgs = g.messages();
 
         fh_ui::Screen s("正式群会话：" + g.getName() + "（" +
@@ -516,13 +513,29 @@ void runLocalChat(const LocalSlot& slot) {
                 /*excludeSelf=*/true, live.platform,
                 "选择要邀请的人（" + platCn(live.platform) + " 账号）",
                 [&live](const ProfilePtr& p) -> std::string {
-                    const auto u = actorFor(p, live.platform);
-                    if (!u) return std::string();
-                    return live.group->contains(u) ? std::string("  ［已在群内］")
-                                                   : std::string("  ［不在群内］");
+                    // 按“人”判是否在群：成员可能以另一平台的账号在群内
+                    //（切换管理模式前入群），须逐平台核对
+                    for (const auto pl :
+                         {PlatformKindFH::QQ, PlatformKindFH::WeChat}) {
+                        const auto u = actorFor(p, pl);
+                        if (u && live.group->contains(u))
+                            return std::string("  ［已在群内］");
+                    }
+                    return std::string("  ［不在群内］");
                 });
             if (!target) continue;
             const auto tu = actorFor(target, live.platform);
+            // 以“人”为单位判重：对方可能已用另一平台账号在群内，
+            // 不能因管理模式切换就以新平台账号重复拉入（避免同人两条成员记录）
+            bool personInGroup = false;
+            for (const auto pl : {PlatformKindFH::QQ, PlatformKindFH::WeChat}) {
+                const auto u = actorFor(target, pl);
+                if (u && g.contains(u)) personInGroup = true;
+            }
+            if (personInGroup) {
+                noticeFail("对方已是本群成员，不能重复邀请。");
+                continue;
+            }
             busy("邀请处理");
             if (g.inviteMember(meUser, tu))
                 noticeOK("已邀请 " + target->getNickname() + " 入群。");

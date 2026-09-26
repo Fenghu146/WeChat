@@ -148,9 +148,8 @@ void runContacts() {
             if (pl >= 0 &&
                 needPick(pl == 0 ? PlatformKindFH::QQ : PlatformKindFH::WeChat,
                          "选择要备注的好友", true)) {
-                s.prompt("输入备注名（直接回车取消）：");
-                s.flush();
-                const auto remark = askText("");
+                // 提示由 askText 自带输出，避免复用已整帧输出的 s 导致旧帧重刷
+                const auto remark = askText("输入备注名（直接回车取消）：");
                 if (remark) {
                     const PlatformKindFH pf = pl == 0 ? PlatformKindFH::QQ
                                                       : PlatformKindFH::WeChat;
@@ -288,7 +287,9 @@ void runContacts() {
                        std::to_string(notYetTarget) + " 人");
                 r.blank();
                 r.text("  推荐名单 = 上述四条件的交集；任一为 0，可推荐即 0 人。");
-                r.text("  建议顺序：账号中心开通" + toCn + " → 通讯录加 " + fromCn +
+                // 入口已拦截“目标服务未开通”，这里唯一可能 ✘ 的是来源服务
+                r.text("  建议顺序：账号中心开通" + fromCn +
+                       "（来源服务） → 通讯录加 " + fromCn +
                        "好友 → 回到 [9] 选择本方向。");
                 present(r, "按任意键返回：");
                 waitKey();

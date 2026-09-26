@@ -71,6 +71,33 @@ UserPtr actorFor(const ProfilePtr& p, PlatformKindFH platform) {
     return u;
 }
 
+// —— 正式群“操作身份”解析（配合管理模式切换）——
+// 任务书 6.(4)：切换管理模式只换绑群策略，成员数据（以入群时的平台账号记录）
+// 原样保留。因此解析当前账号的操作身份时，优先取当前管理模式的平台账号；
+// 若它不是群成员，而本人的另一平台账号恰在群内（切换前入群），则回退到
+// 该成员身份 —— 保证切换后群主/管理员仍可正常操作，而不是被判成“非成员”。
+UserPtr localActorFor(const ProfilePtr& p, const LocalSlot& slot) {
+    const GroupFH& grp = *slot.group;
+    const UserPtr primary = actorFor(p, slot.platform);
+    if (primary && grp.contains(primary)) return primary;
+    for (const auto pl : {PlatformKindFH::QQ, PlatformKindFH::WeChat}) {
+        if (pl == slot.platform) continue;
+        const UserPtr u = actorFor(p, pl);
+        if (u && grp.contains(u)) return u;
+    }
+    return primary;  // 无成员身份时保持原口径（无该平台账号 / 非成员）
+}
+
+// 由成员实体（任一平台账号）反查自然人档案：切换管理模式后，
+// 群内成员可能以“另一平台”的账号入群，按 QQ / 微信两个平台逐一匹配。
+ProfilePtr profileOfMember(const UserPtr& u) {
+    if (!u) return nullptr;
+    for (const auto& q : g.people)
+        for (const auto pl : {PlatformKindFH::QQ, PlatformKindFH::WeChat})
+            if (q->platformAccountId(pl) == u->getId()) return q;
+    return nullptr;
+}
+
 // 由“平台账号号码”反查昵称（用于官方群/讨论组中成员展示）
 std::string nickOf(PlatformKindFH platform, const std::string& accountId) {
     for (const auto& p : g.people) {

@@ -138,10 +138,11 @@ void runConversationList() {
     };
     std::vector<Item> items;
 
-    // 本地正式群：需“我”在该群对应平台有账号，且我是成员
+    // 本地正式群：需“我”在该群内有成员身份（任一平台账号入群均算，
+    // 切换管理模式后仍可从会话列表进入）
     for (const auto& s : g.locals) {
         if (s.group->isDisbanded()) continue;
-        const auto u = actorFor(g.me, s.platform);
+        const auto u = localActorFor(g.me, s);
         if (!u || !s.group->contains(u)) continue;
         items.push_back(Item{ConvKind::Local, s.group->getId(),
                              "正式群 · " + platCn(s.platform) + " · " +

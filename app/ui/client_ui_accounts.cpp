@@ -96,9 +96,8 @@ void runServiceCenter() {
                            "，每人只能绑定一个。");
                 continue;
             }
-            s.prompt("输入要绑定的微信号（直接回车取消）：");
-            s.flush();
-            auto wid = askText("");
+            // 提示由 askText 自带输出，避免复用已整帧输出的 s 导致旧帧重刷
+            auto wid = askText("输入要绑定的微信号（直接回车取消）：");
             if (!wid) { noticeInfo("已取消绑定"); continue; }
             busy("绑定处理");
             if (g.registry.bindWeChat(g.me, *wid))
