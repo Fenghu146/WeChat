@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
+# 在 project() 之前尝试定位系统 Ninja，绕过 CLion 内置 Ninja 路径失效问题
+find_program(CLION_FIX_NINJA NAMES ninja PATHS /opt/homebrew/bin /usr/local/bin /usr/bin)
+if(CLION_FIX_NINJA)
+    set(CMAKE_MAKE_PROGRAM "${CLION_FIX_NINJA}" CACHE FILEPATH "Ninja executable" FORCE)
+else()
+    message(WARNING "未找到系统 Ninja，请执行 brew install ninja 后重试；或在 CLion Settings > Build > Toolchain 中将 Ninja 路径改为 Homebrew 安装位置")
+endif()
 project(im_platform_fh LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
