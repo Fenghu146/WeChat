@@ -159,17 +159,17 @@ void runOfficialChat(std::string groupId) {
                 kind == MessageKindFH::IMAGE || kind == MessageKindFH::DOCUMENT
                     ? "（如图片名/文件名）"
                     : "";
-            s.prompt("输入" + kindName + "消息" + what + "内容（直接回车取消）：");
-            s.flush();
-            auto text = askText("");
+            // 表单提示由 askText 自带输出；不再复用本轮已整帧输出的 s：
+            // 复用会把旧帧（含旧状态条）整屏重刷一遍，造成提示/结果重复出现
+            auto text = askText("输入" + kindName + "消息" + what +
+                               "内容（直接回车取消）：");
             if (!text) {
                 noticeInfo("已取消发送");
                 continue;
             }
             bool wantReply = false;
             if (kind == MessageKindFH::TEXT) {
-                s.prompt("作为引用回复发送？[y]是 / [n]否：");
-                s.flush();
+                std::cout << "  作为引用回复发送？[y]是 / [n]否：" << std::flush;
                 wantReply = waitKey() == 'y';
             }
             busy("消息发送");
@@ -236,11 +236,26 @@ void runOfficialChat(std::string groupId) {
                 });
             if (!target) continue;
             busy("推荐入群");
-            if (g.official.inviteIntoGroup(*g.me, *target, groupId))
+            if (g.official.inviteIntoGroup(*g.me, *target, groupId)) {
                 noticeOK("已推荐 " + target->getNickname() + " 进入「" +
                          info->name + "」。");
-            else
-                noticeFail("推荐失败：对方须已绑定微信、不在群内且群未满员。");
+            } else {
+                // 对照 inviteIntoGroup 的拒绝分支给出具体原因，
+                // 不再让用户在三个条件里自己猜
+                const std::string tgtId =
+                    target->platformAccountId(PlatformKindFH::WeChat);
+                const bool alreadyIn =
+                    std::find(info->memberIds.begin(), info->memberIds.end(),
+                              tgtId) != info->memberIds.end();
+                if (alreadyIn)
+                    noticeFail("推荐失败：" + target->getNickname() +
+                               " 已在本群内。");
+                else if (info->memberIds.size() >= info->maxMembers)
+                    noticeFail("推荐失败：本群已满员（上限 " +
+                               std::to_string(info->maxMembers) + " 人）。");
+                else
+                    noticeFail("推荐失败：对方须已绑定微信号。");
+            }
             continue;
         }
         case '5': {  // 解散本群（仅群主）

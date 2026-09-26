@@ -60,7 +60,7 @@ bool runWorkspace() {
     for (;;) {
         int nLocal = 0, nOfficial = 0, nDisc = 0;
         for (const auto& slot : g.locals) {
-            const auto u = actorFor(g.me, slot.platform);
+            const auto u = localActorFor(g.me, slot);
             if (u && !slot.group->isDisbanded() && slot.group->contains(u)) ++nLocal;
         }
         for (const GroupInfoFH& gi : g.official.groupsOfUser(*g.me))

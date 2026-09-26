@@ -126,6 +126,12 @@ ProfilePtr pickProfile(bool excludeSelf, std::optional<PlatformKindFH> needAcct,
                        const std::string& title,
                        const std::function<std::string(const ProfilePtr&)>& annotate = {});
 void drawAccountCard(fh_ui::Screen& s);
+// 正式群“操作身份”解析（client_ui_state.cpp）：
+// 切换管理模式只换群策略、成员仍以入群时的平台账号记录（任务书 6.(4)），
+// 因此解析身份时允许回退到本人“任一平台”在群内的成员身份。
+UserPtr localActorFor(const ProfilePtr& p, const LocalSlot& slot);
+// 由成员实体（任一平台的账号）反查其自然人档案
+ProfilePtr profileOfMember(const UserPtr& u);
 
 // ------------------------------------------------------------
 // 各业务界面入口（供主工作台与相互跳转调用）
